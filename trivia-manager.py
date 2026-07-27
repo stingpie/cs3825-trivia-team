@@ -2,13 +2,17 @@ from multiprocessing import Lock
 from multiprocessing.managers import BaseManager
 import atexit
 import pickle
-from uuid import UUID
+import uuid
 
-trivia_data_server = BaseManager(('localhost', 5555))
+
+
+
+trivia_data_server = BaseManager(('localhost', 5555), b'trivia')
 trivia_set_lock=Lock()
 users_lock=Lock()
 
-
+users={}
+trivia_sets=[]
 
 
 # trivia json specification:
@@ -54,14 +58,6 @@ class User():
 
 
 
-def start(): # TODO: make this secure. include a passcode with every trivia set that only authorized users have. 
-             # TODO: Make this list into a dictionary, indexed with a UUID. then, associate a unique lock with every trivia set.
-             # TODO: load trivia sets from file, if file exists. 
-    global trivia_sets 
-    global users
-    users={}
-    trivia_sets=[]
-
 
 def get_trivia(idx_of_trivia_set, question_idx): # TODO: make this secure. Include a passcode with every trivia set that only authorized users have.
     with trivia_set_lock:
@@ -79,12 +75,13 @@ def new_trivia_set(trivia_json):
         return len(trivia_sets)-1
 
 def register_user(username, password):
+    global users
     with users_lock:
-        if any(map(lambda x: x.username==username), users.values()):
+        if any(map(lambda x: x.username==username, users.values())):
             return "username already taken"
-        new_uuid = UUID4()
-        users[new_uuid]=[User(username, password, new_uuid)]
-        return uuid
+        new_uuid = uuid.uuid4().hex
+        users[new_uuid]=User(username, password, new_uuid)
+        return new_uuid
 
 
 

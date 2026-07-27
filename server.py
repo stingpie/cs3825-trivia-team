@@ -1,13 +1,18 @@
-from flask import Flask, session, request, jsonify
+from flask import Flask, session, request, jsonify, Response
 from multiprocessing.managers import BaseManager
+import secrets
 
 app= Flask(__name__)
+app.secret_key = secrets.token_urlsafe(16)
 
-trivia_data_server=BaseManager(('localhost', 5555))
+
+trivia_data_server=BaseManager(('localhost', 5555), b'trivia')
 trivia_data_server.register('get_trivia')
 trivia_data_server.register('verify_answer')
 trivia_data_server.register('new_trivia_set')
 trivia_data_server.register('register_user')
+trivia_data_server.connect()
+
 
 @app.route("/")
 def hello_world():
@@ -61,13 +66,13 @@ def create_user(): # should recieve {'username':"asldjad", "password":"alsdjoa"}
     user_info = request.get_json()
     username= user_info['username']
     password = user_info['password']
-    result = trivia_data_server.register_user(username, password)
-    if isinstance(result, str):
-        return result, 409
+    result = str(trivia_data_server.register_user(username, password))
+    if result=="username already taken":
+        return Response(str(result), 409)
     session['UUID']=result
     session['idx_of_trivia_set']=0
     session['question_idx']=0
-    return 'new user created!', 201
+    return Response('new user created!', 201)
 
 
 
