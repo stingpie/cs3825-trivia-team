@@ -3,7 +3,7 @@ from multiprocessing.managers import BaseManager
 import atexit
 import pickle
 import uuid
-
+import answer_normalize
 
 
 
@@ -37,8 +37,13 @@ class TriviaSet():
     def __init__(self, trivia_specification):
         self.trivia=trivia_specification
 
-    def verify_answer(self, index, answer_to_test): # TODO: answer normalization for short answer questions
-        return answer_to_test in self.trivia[index]['correct_answers'] 
+    def verify_answer(self, index, answer_to_test):
+        if(self.trivia[index]['type']=='multiple select'): # all of the answers to test & correct answers must match
+            return set(map(answer_normalize.normalize(answer_to_test)))== \
+                       set(map(answer_normalize.normalize(self.trivia[index]['correct answers'])))
+        else: #the answer to test only has to match a single correct answer.
+            return any(map(lambda x: answer_normalize.same(answer_to_test[0], x), self.trivia[index]['correct answers']))
+
 
     def get_question(self, index):
         ret = self.trivia[index].copy()
