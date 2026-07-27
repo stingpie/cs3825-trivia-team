@@ -13,7 +13,7 @@ trivia_data_server.register('register_user')
 def hello_world():
     return "<p> hello, world</p>"
 
-@app.route("api/trivia", method=["GET"])
+@app.route("/api/trivia", methods=["GET"])
 def get_trivia():
     if('UUID' in session and 'idx_of_trivia_set' in session and 'question_idx' in session):
         result = trivia_data_server.get_trivia(session['idx_of_trivia_set'], session['question_idx'])
@@ -28,7 +28,7 @@ def get_trivia():
     if('question_idx' not in session):
         return "No question index found", 400
         
-@app.route("api/trivia/verify", method=["GET"])
+@app.route("/api/trivia/verify", methods=["GET"])
 def verify_answer(): # should recieve {'answer':'something seomthing something'} returns {'correct':true|false}
     answer = request.get_json()['question']
     if('UUID' in session and 'idx_of_trivia_set' in session and 'question_idx' in session):
@@ -42,7 +42,7 @@ def verify_answer(): # should recieve {'answer':'something seomthing something'}
     if('question_idx' not in session):
         return "No question index found", 400
 
-@app.route("api/trivia/next", method=["GET"])
+@app.route("/api/trivia/next", methods=["GET"])
 def next_question():
     if('UUID' in session and 'idx_of_trivia_set' in session and 'question_idx' in session):
         session['question_idx']+=1
@@ -56,7 +56,7 @@ def next_question():
             
 
 
-@app.route("api/users", method=['POST'])
+@app.route("/api/users", methods=['POST'])
 def create_user(): # should recieve {'username':"asldjad", "password":"alsdjoa"} returns 201 on success
     user_info = request.get_json()
     username= user_info['username']
