@@ -59,7 +59,10 @@ def next_question():
         else:
             return result
             
-
+@app.route("/api/trivia", methods=["POST"])
+def create_trivia():
+    trivia_json = request.get_json()
+    return str(trivia_data_server.new_trivia_set(trivia_json))
 
 @app.route("/api/users", methods=['POST'])
 def create_user(): # should recieve {'username':"asldjad", "password":"alsdjoa"} returns 201 on success

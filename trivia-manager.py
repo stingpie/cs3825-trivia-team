@@ -60,16 +60,19 @@ class User():
 
 
 def get_trivia(idx_of_trivia_set, question_idx): # TODO: make this secure. Include a passcode with every trivia set that only authorized users have.
+    global trivia_sets
     with trivia_set_lock:
         if(question_idx>=trivia_sets[idx_of_trivia_set]):
             return False
         return trivia_sets[idx_of_trivia_set].get_question(question_idx)
 
 def verify_answer(idx_of_trivia_set, question_idx, answer):
+    global trivia_sets
     with trivia_set_lock:
         return trivia_sets[idx_of_trivia_set].verify_answer(question_idx, answer)
 
 def new_trivia_set(trivia_json):
+    global trivia_sets
     with trivia_set_lock:
         trivia_sets+=[TriviaSet(trivia_json)]
         return len(trivia_sets)-1
