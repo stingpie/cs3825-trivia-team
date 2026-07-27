@@ -11,6 +11,8 @@ trivia_data_server.register('get_trivia')
 trivia_data_server.register('verify_answer')
 trivia_data_server.register('new_trivia_set')
 trivia_data_server.register('register_user')
+trivia_data_server.register('get_user')
+trivia_data_server.register('get_analytics')
 trivia_data_server.connect()
 
 
@@ -34,11 +36,11 @@ def get_trivia():
         return "No question index found", 400
         
 @app.route("/api/trivia/verify", methods=["GET"])
-def verify_answer(): # should recieve {'answer':'something seomthing something'} returns {'correct':true|false}
+def verify_answer(): # should recieve {'answer':['something seomthing something']} returns {'correct':true|false}
     answer = request.get_json()['question']
     if('UUID' in session and 'idx_of_trivia_set' in session and 'question_idx' in session):
         response={}
-        response['correct']=trivia_data_server.verify_answer(session['idx_of_trivia_set'], session['question_idx'])
+        response['correct']=trivia_data_server.verify_answer(session['UUID'], session['idx_of_trivia_set'], session['question_idx'])
         return jsonify(response)
     if('UUID' not in session):
         return "User not logged in.", 401 # unauthorized
@@ -78,6 +80,15 @@ def create_user(): # should recieve {'username':"asldjad", "password":"alsdjoa"}
     return Response('new user created!', 201)
 
 
+@app.route("/api/trivia/analytics", methods=["GET"])
+def get_analytics():
+    idx_of_trivia_set=request.get_json()['idx_of_trivia_set']
+    return trivia_data_server.get_analytics(idx_of_trivia_set)
+
+@app.route("/api/users", methods=['POST'])
+def get_user():
+    UUID=request.get_json()['UUID']
+    return trivia_data_server.get_user(UUID)
 
 
 

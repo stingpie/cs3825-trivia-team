@@ -8,7 +8,7 @@ import uuid
 
 
 trivia_data_server = BaseManager(('localhost', 5555), b'trivia')
-trivia_set_lock=Lock()
+trivia_set_lock=Lock() # TODO: Get a seperate lock for every trivia set. It's excessive to lock the entire list.
 users_lock=Lock()
 
 users={}
@@ -34,8 +34,16 @@ trivia_sets=[]
 # ]
 
 class TriviaSet():
-    def __init__(self, trivia_specification):
+    def __init__(self, trivia_specification, creator=None):
         self.trivia=trivia_specification
+        self.creator=creator
+        self.num_questions=len(trivia_specification)
+        ## Analytics gives the creator of the trivia information about the responses to 
+        ## the questions. 'correct' increments for every correct answer, 'incorrect'
+        ## increments for every incorrect answer. 'responses' holds the individual 
+        ## responses, along with the UUID of the user who gave it.
+        self.analytics=[{'correct':0,'incorrect':0, 'responses':[]}*self.num_questions]
+
 
     def verify_answer(self, index, answer_to_test): # TODO: answer normalization for short answer questions
         return answer_to_test in self.trivia[index]['correct_answers'] 
@@ -66,10 +74,30 @@ def get_trivia(idx_of_trivia_set, question_idx): # TODO: make this secure. Inclu
             return False
         return trivia_sets[idx_of_trivia_set].get_question(question_idx)
 
-def verify_answer(idx_of_trivia_set, question_idx, answer):
+def get_analytics(idx_of_trivia_set): # TODO: This should only be available to the creator of the trivia.
     global trivia_sets
     with trivia_set_lock:
-        return trivia_sets[idx_of_trivia_set].verify_answer(question_idx, answer)
+        return trivia_sets[idx_of_trivia_set].analytics
+
+def get_user(UUID):
+    global users
+    with user_lock:
+        result = users[UUID].copy()
+        result.password=None ## DO NOT SEND PASSWORDS TO ANYBODY WHO ASKS
+        return result
+
+def verify_answer(UUID, idx_of_trivia_set, question_idx, answer):
+    global trivia_sets
+    with trivia_set_lock:
+        
+        result = trivia_sets[idx_of_trivia_set].verify_answer(question_idx, answer)
+        if(result is True):
+            trivia_sets[idx_of_trivia_set].analytics[question_idx]['correct']+=1
+        else:
+            trivia_sets[idx_of_trivia_set].analytics[question_idx]['incorrect']+=1
+        trivia_sets[idx_of_trivia_set].analytics['responses']+=[(UUID, answer)]
+        return result
+
 
 def new_trivia_set(trivia_json):
     global trivia_sets
@@ -97,6 +125,8 @@ trivia_data_server.register('get_trivia', get_trivia)
 trivia_data_server.register('verify_answer', verify_answer)
 trivia_data_server.register('new_trivia_set', new_trivia_set)
 trivia_data_server.register('register_user', register_user)
+trivia_data_server.register('get_user', get_user)
+trivia_data_server.register('get_analytics', get_analytics)
 
 server= trivia_data_server.get_server()
 server.serve_forever()
