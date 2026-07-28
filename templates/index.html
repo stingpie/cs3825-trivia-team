@@ -336,13 +336,13 @@
       to { transform: translateX(0); opacity: 1; }
     }
 
-    /* Mobile Responsive Fixes */
+/* Mobile Responsive Fixes (No Horizontal Scroll) */
     @media (max-width: 768px) {
       header {
         flex-direction: column;
-        align-items: stretch;
+        align-items: center;
         gap: 0.75rem;
-        padding: 0.75rem 1rem;
+        padding: 0.75rem 0.5rem;
       }
 
       .nav-controls {
@@ -352,18 +352,29 @@
       }
 
       nav {
-        overflow-x: auto;
+        display: grid;
+        grid-template-columns: repeat(2, 1fr); /* Fits tabs neatly in a 2-column grid */
+        gap: 0.3rem;
         width: 100%;
-        white-space: nowrap;
-        justify-content: flex-start;
+        background: rgba(0, 0, 0, 0.2);
+        padding: 0.35rem;
+        border-radius: 0.8rem;
+      }
+
+      .nav-btn {
+        padding: 0.4rem 0.5rem;
+        font-size: 0.75rem; /* Slightly smaller text so it fits comfortably */
+        text-align: center;
+        width: 100%;
+        white-space: normal; /* Allows text to wrap neatly if needed */
       }
 
       main {
-        padding: 1rem 0.75rem;
+        padding: 1rem 0.5rem;
       }
 
       .glass-card {
-        padding: 1.25rem;
+        padding: 1.25rem 0.85rem;
       }
 
       .quiz-grid {
@@ -912,12 +923,14 @@
       return null;
     }
 
+    // UPDATED: Sends payload as an array and aligns with server.py GET method
     async function apiVerifyAnswer(answerArr) {
       try {
+        const payloadArray = Array.isArray(answerArr) ? answerArr : [answerArr];
         const response = await fetch('/api/trivia/verify', {
-          method: 'POST',
+          method: 'GET',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ answer: answerArr })
+          body: JSON.stringify({ answer: payloadArray })
         });
         if (response.ok) {
           const res = await response.json();
@@ -1146,6 +1159,7 @@
       }
     }
 
+    // UPDATED: Sends input string wrapped inside an array
     async function handleAnswerSubmit(event) {
       event.preventDefault();
       const userAns = document.getElementById('ans').value;
