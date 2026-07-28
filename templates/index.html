@@ -336,7 +336,7 @@
       to { transform: translateX(0); opacity: 1; }
     }
 
-/* Mobile Responsive Fixes (No Horizontal Scroll) */
+    /* Mobile Responsive Fixes (No Horizontal Scroll) */
     @media (max-width: 768px) {
       header {
         flex-direction: column;
@@ -353,7 +353,7 @@
 
       nav {
         display: grid;
-        grid-template-columns: repeat(2, 1fr); /* Fits tabs neatly in a 2-column grid */
+        grid-template-columns: repeat(2, 1fr);
         gap: 0.3rem;
         width: 100%;
         background: rgba(0, 0, 0, 0.2);
@@ -363,10 +363,10 @@
 
       .nav-btn {
         padding: 0.4rem 0.5rem;
-        font-size: 0.75rem; /* Slightly smaller text so it fits comfortably */
+        font-size: 0.75rem;
         text-align: center;
         width: 100%;
-        white-space: normal; /* Allows text to wrap neatly if needed */
+        white-space: normal;
       }
 
       main {
@@ -413,8 +413,16 @@
         <button class="nav-btn active" onclick="switchView('home-view')">Home / Explore</button>
         <button class="nav-btn" onclick="switchView('join-view')">Join Room</button>
         <button class="nav-btn" onclick="switchView('dashboard-view')">My Activity & Stats</button>
-        <button class="nav-btn" onclick="switchView('login-view')">Login</button>
+        <button class="nav-btn" id="login-nav-btn" onclick="switchView('login-view')">Login</button>
       </nav>
+
+      <!-- Logged-In User Profile Tag & Logout Button -->
+      <div id="user-profile-badge" class="player-pill" style="display: none; background: rgba(0,210,255,0.1); border-color: var(--accent-neon);">
+        <span id="nav-user-icon">👤</span>
+        <span id="nav-user-name" style="color: var(--accent-neon);">User</span>
+        <button onclick="handleLogout()" style="background: transparent; border: none; color: var(--accent-red); cursor: pointer; font-weight: 700; margin-left: 0.5rem;">✕</button>
+      </div>
+
       <button class="theme-toggle-btn" onclick="toggleTheme()">
         <span id="theme-icon">🌙</span> <span id="theme-text">Dark</span>
       </button>
@@ -729,20 +737,41 @@
 
     <!-- PAGE 5: User Activity Dashboard -->
     <div id="dashboard-view" class="glass-card glass-card-wide view">
-      <h2>My Activity & Performance Dashboard</h2>
-      <p class="subtitle">Overview of your played trivia games, accuracy, and streak records.</p>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <h2>My Activity & Performance Dashboard</h2>
+        <span class="badge" id="dash-role-badge">GUEST SESSION</span>
+      </div>
+      <p class="subtitle" id="dash-subtitle-text">Overview of your played trivia games, accuracy, and streak records.</p>
+
+      <!-- Guest Warning Banner -->
+      <div id="dash-guest-warning" style="background: rgba(245, 158, 11, 0.12); border: 1px solid var(--accent-gold); padding: 0.85rem 1.25rem; border-radius: 0.8rem; margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 0.85rem; color: var(--accent-gold);">🎮 Playing as <strong>Guest</strong>. Stats are temporary. Sign up or log in to save global history!</span>
+        <button class="btn-neon" style="width: auto; padding: 0.4rem 0.85rem; font-size: 0.75rem;" onclick="switchView('signup-view')">Create Free Account</button>
+      </div>
+
+      <!-- Teacher Special Management Panel -->
+      <div id="dash-teacher-panel" style="display: none; background: rgba(0, 210, 255, 0.08); border: 1px solid var(--accent-neon); padding: 1.25rem; border-radius: 0.8rem; margin-bottom: 1.5rem;">
+        <h3 style="color: var(--accent-neon); margin-bottom: 0.5rem;">🎓 Teacher Control Panel</h3>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">Manage class quizzes, review answer keys, and launch live host games.</p>
+        <div style="display: flex; gap: 0.75rem;">
+          <button class="btn-neon" style="width: auto; padding: 0.5rem 1rem; font-size: 0.85rem;" onclick="openModal('add-quiz-modal')">+ Create Quiz Set</button>
+          <button class="btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.85rem;" onclick="showCustomToast('📋 Analytics Report Exported')">Export Student Grades</button>
+        </div>
+      </div>
 
       <div class="stats-grid">
-        <div class="stat-box"><div class="stat-value">24</div><div class="stat-label">Games Played</div></div>
-        <div class="stat-box"><div class="stat-value">91%</div><div class="stat-label">Avg Accuracy</div></div>
-        <div class="stat-box"><div class="stat-value">🔥 7</div><div class="stat-label">Best Streak</div></div>
-        <div class="stat-box"><div class="stat-value">18,420</div><div class="stat-label">Total Points</div></div>
+        <div class="stat-box"><div class="stat-value" id="dash-stat-games">0</div><div class="stat-label">Games Played</div></div>
+        <div class="stat-box"><div class="stat-value" id="dash-stat-acc">0%</div><div class="stat-label">Avg Accuracy</div></div>
+        <div class="stat-box"><div class="stat-value" id="dash-stat-streak">🔥 0</div><div class="stat-label">Best Streak</div></div>
+        <div class="stat-box"><div class="stat-value" id="dash-stat-points">0</div><div class="stat-label">Total Points</div></div>
       </div>
 
       <label>Recent Game History & Activity</label>
       <table class="history-table">
         <thead><tr><th>Quiz Title</th><th>Role</th><th>Score / Result</th><th>Accuracy</th><th>Date</th></tr></thead>
-        <tbody><tr><td>Networking Protocols</td><td>Player</td><td>3,850 pts</td><td>100%</td><td>Today</td></tr></tbody>
+        <tbody id="dash-history-rows">
+          <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No game history recorded yet. Play a solo or live game!</td></tr>
+        </tbody>
       </table>
     </div>
 
@@ -776,6 +805,13 @@
         <div class="form-group">
           <label for="signup-pass">Password</label>
           <input type="password" id="signup-pass" placeholder="Create password" required>
+        </div>
+        <div class="form-group">
+          <label for="signup-role">Account Privilege Role</label>
+          <select id="signup-role">
+            <option value="student">Student Player</option>
+            <option value="teacher">Teacher / Instructor</option>
+          </select>
         </div>
         <button type="submit" class="btn-neon">Create Account</button>
       </form>
@@ -839,6 +875,16 @@
     let selectedPacing = 'self';
     let localCurrentQuestion = null;
 
+    // Current Session & User State
+    let currentUser = null; // null = guest session
+    let userStats = {
+      gamesPlayed: 0,
+      totalPoints: 0,
+      bestStreak: 0,
+      accuracy: 100,
+      history: []
+    };
+
     // Default Fallback Quizzes
     const quizDatabase = {
       "Networking Protocols": {
@@ -873,24 +919,42 @@
     function closeModal(id) { document.getElementById(id).classList.remove('active'); }
 
     // --- FLASK BACKEND INTEGRATION HELPERS ---
-    async function apiRegisterUser(username, password) {
+    async function apiRegisterUser(username, password, role = 'student') {
       try {
         const response = await fetch('/api/users', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
+          body: JSON.stringify({ username, password, role })
         });
         if (response.status === 201) {
-          showCustomToast("Account created and logged in!");
-          return true;
+          showCustomToast("Account created successfully!");
+          return { success: true, username, role };
         } else if (response.status === 409) {
-          showCustomToast("Username taken!");
-          return false;
+          showCustomToast("Username is already taken!");
+          return { success: false };
         }
       } catch(e) {
-        showCustomToast("Server offline, using client session mode");
+        showCustomToast("Server offline, running in local session mode");
       }
-      return true;
+      return { success: true, username, role };
+    }
+
+    async function apiLoginUser(username, password) {
+      try {
+        const response = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        if (response.ok) {
+          const res = await response.json();
+          showCustomToast("Logged in successfully!");
+          return { success: true, username, role: res.role || 'student' };
+        }
+      } catch(e) {
+        console.log("Local auth login fallback");
+      }
+      return { success: true, username, role: 'student' };
     }
 
     async function apiPostQuiz(quizPayload) {
@@ -923,7 +987,6 @@
       return null;
     }
 
-    // UPDATED: Sends payload as an array and aligns with server.py GET method
     async function apiVerifyAnswer(answerArr) {
       try {
         const payloadArray = Array.isArray(answerArr) ? answerArr : [answerArr];
@@ -954,13 +1017,103 @@
       return null;
     }
 
-    // --- UI FLOW & HANDLERS ---
+    // --- UI & AUTH STATE MANAGEMENT ---
     async function handleAuthSubmit(event) {
       event.preventDefault();
-      const u = document.getElementById('user')?.value || document.getElementById('signup-email')?.value || 'student';
-      const p = document.getElementById('pass')?.value || document.getElementById('signup-pass')?.value || 'pass';
-      await apiRegisterUser(u, p);
+      const isSignUp = document.getElementById('signup-view').classList.contains('active');
+      
+      let res;
+      if (isSignUp) {
+        const u = document.getElementById('signup-email').value;
+        const p = document.getElementById('signup-pass').value;
+        const r = document.getElementById('signup-role')?.value || 'student';
+        res = await apiRegisterUser(u, p, r);
+      } else {
+        const u = document.getElementById('user').value;
+        const p = document.getElementById('pass').value;
+        res = await apiLoginUser(u, p);
+      }
+
+      if (res && res.success) {
+        setLoggedInUser(res.username, res.role || 'student');
+        switchView('dashboard-view');
+      }
+    }
+
+    function setLoggedInUser(username, role) {
+      currentUser = { username, role };
+
+      // Update Nav Bar UI
+      document.getElementById('login-nav-btn').style.display = 'none';
+      document.getElementById('user-profile-badge').style.display = 'flex';
+      document.getElementById('nav-user-name').innerText = username;
+      document.getElementById('nav-user-icon').innerText = role === 'teacher' ? '🎓' : '👤';
+
+      // Update Dashboard View UI State
+      document.getElementById('dash-guest-warning').style.display = 'none';
+      document.getElementById('dash-role-badge').innerText = `${role.toUpperCase()} ACCOUNT`;
+      document.getElementById('dash-subtitle-text').innerText = `Welcome back, ${username}! Syncing performance records.`;
+
+      if (role === 'teacher') {
+        document.getElementById('dash-teacher-panel').style.display = 'block';
+      } else {
+        document.getElementById('dash-teacher-panel').style.display = 'none';
+      }
+
+      updateDashboardStats();
+    }
+
+    function handleLogout() {
+      currentUser = null;
+      document.getElementById('login-nav-btn').style.display = 'block';
+      document.getElementById('user-profile-badge').style.display = 'none';
+
+      document.getElementById('dash-guest-warning').style.display = 'flex';
+      document.getElementById('dash-role-badge').innerText = 'GUEST SESSION';
+      document.getElementById('dash-teacher-panel').style.display = 'none';
+      document.getElementById('dash-subtitle-text').innerText = 'Overview of your played trivia games, accuracy, and streak records.';
+
+      showCustomToast("Logged out to Guest Mode.");
       switchView('home-view');
+    }
+
+    function recordGameResult(quizTitle, finalScore, accuracyPct) {
+      userStats.gamesPlayed += 1;
+      userStats.totalPoints += finalScore;
+      if (currentStreak > userStats.bestStreak) userStats.bestStreak = currentStreak;
+      userStats.accuracy = Math.round((userStats.accuracy + accuracyPct) / (userStats.gamesPlayed === 1 ? 1 : 2));
+
+      userStats.history.unshift({
+        title: quizTitle,
+        role: currentUser ? currentUser.role : 'Guest',
+        score: `${finalScore} pts`,
+        accuracy: `${accuracyPct}%`,
+        date: 'Just Now'
+      });
+
+      updateDashboardStats();
+    }
+
+    function updateDashboardStats() {
+      document.getElementById('dash-stat-games').innerText = userStats.gamesPlayed;
+      document.getElementById('dash-stat-acc').innerText = `${userStats.accuracy}%`;
+      document.getElementById('dash-stat-streak').innerText = `🔥 ${userStats.bestStreak}`;
+      document.getElementById('dash-stat-points').innerText = userStats.totalPoints.toLocaleString();
+
+      const tbody = document.getElementById('dash-history-rows');
+      if (userStats.history.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No game history recorded yet. Play a solo or live game!</td></tr>`;
+      } else {
+        tbody.innerHTML = userStats.history.map(h => `
+          <tr>
+            <td><strong>${h.title}</strong></td>
+            <td><span class="badge" style="font-size:0.65rem;">${h.role.toUpperCase()}</span></td>
+            <td>${h.score}</td>
+            <td style="color:var(--accent-green); font-weight:700;">${h.accuracy}</td>
+            <td style="color:var(--text-muted);">${h.date}</td>
+          </tr>
+        `).join('');
+      }
     }
 
     async function handleSaveBuilderQuiz() {
@@ -1154,12 +1307,12 @@
           document.getElementById('ans').value = '';
         } else {
           showCustomToast(`Quiz Completed! Final Score: ${currentScore}`);
+          recordGameResult("Networking Protocols", currentScore, 100);
           switchView('dashboard-view');
         }
       }
     }
 
-    // UPDATED: Sends input string wrapped inside an array
     async function handleAnswerSubmit(event) {
       event.preventDefault();
       const userAns = document.getElementById('ans').value;
@@ -1186,7 +1339,7 @@
       setTimeout(loadMultiplayerQuestion, 1200);
     }
 
-    // Solo Practice
+    // Solo Practice Arcade
     function startSoloPlay(quizTitle) {
       const sampleQuestions = quizDatabase["Networking Protocols"].questions;
       currentQuestionIndex = 0; currentScore = 0; currentStreak = 0;
@@ -1239,6 +1392,7 @@
           document.getElementById('solo-ans').value = '';
         } else {
           showCustomToast(`Solo Practice Finished! Accuracy: ${accuracyPct}% | Score: ${currentScore}`);
+          recordGameResult("Networking Protocols", currentScore, accuracyPct);
           switchView('dashboard-view');
         }
       }, 1600);
