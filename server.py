@@ -1,4 +1,4 @@
-from flask import Flask, session, request, jsonify, Response
+from flask import Flask, session, request, jsonify, Response, render_template
 from multiprocessing.managers import BaseManager
 import secrets
 import time
@@ -66,9 +66,9 @@ def _unwrap(value):
     return value
 
 
-@app.route("/")
-def hello_world():
-    return "<p> hello, world</p>"
+@app.route('/')
+def index():
+    return render_template('index.html')
 
 @app.route("/api/trivia", methods=["GET"])
 @require_login  # was a manual 'UUID' in session check -- now handled by the decorator
