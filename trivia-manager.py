@@ -5,6 +5,11 @@ import pickle
 import uuid
 import answer_normalize
 
+# --- Security integration (Jordan) ------------------------------------------
+# security.py must sit next to this file (or be installed on the Python path).
+from security import hash_password, verify_password
+# -----------------------------------------------------------------------------
+
 
 
 trivia_data_server = BaseManager(('localhost', 5555), b'trivia')
@@ -42,30 +47,32 @@ class TriviaSet():
         ## the questions. 'correct' increments for every correct answer, 'incorrect'
         ## increments for every incorrect answer. 'responses' holds the individual 
         ## responses, along with the UUID of the user who gave it.
-        self.analytics=[{'correct':0,'incorrect':0, 'responses':[]}*self.num_questions]
+        self.analytics=[{'correct':0,'incorrect':0, 'responses':[]} for _ in range(self.num_questions)]
 
 
     def verify_answer(self, index, answer_to_test):
         if(self.trivia[index]['type']=='multiple select'): # all of the answers to test & correct answers must match
-            return set(map(answer_normalize.normalize(answer_to_test)))== \
-                       set(map(answer_normalize.normalize(self.trivia[index]['correct answers'])))
+            given = set(map(answer_normalize.normalize, answer_to_test))
+            correct = set(map(answer_normalize.normalize, self.trivia[index]['correct answers']))
+            return given == correct
         else: #the answer to test only has to match a single correct answer.
             return any(map(lambda x: answer_normalize.same(answer_to_test[0], x), self.trivia[index]['correct answers']))
 
 
     def get_question(self, index):
         ret = self.trivia[index].copy()
-        ret['correct_answers']=None    # prevent the client from scraping the password.
+        ret.pop('correct answers', None)  # prevent the client from scraping the answer key
         return ret
 
 
 
 
 class User():
-    def __init__(self, username, password, UUID):
+    def __init__(self, username, password_hash, UUID, role="student"):
         self.username=username
-        self.password=password
-        self.UUID=UUID 
+        self.password=password_hash  # J1: this is now a bcrypt hash, never plaintext
+        self.UUID=UUID
+        self.role=role  # J3: RBAC -- "student" | "teacher"
         
 
 
@@ -75,7 +82,7 @@ class User():
 def get_trivia(idx_of_trivia_set, question_idx): # TODO: make this secure. Include a passcode with every trivia set that only authorized users have.
     global trivia_sets
     with trivia_set_lock:
-        if(question_idx>=trivia_sets[idx_of_trivia_set]):
+        if(question_idx>=trivia_sets[idx_of_trivia_set].num_questions):
             return False
         return trivia_sets[idx_of_trivia_set].get_question(question_idx)
 
@@ -86,10 +93,28 @@ def get_analytics(idx_of_trivia_set): # TODO: This should only be available to t
 
 def get_user(UUID):
     global users
-    with user_lock:
-        result = users[UUID].copy()
-        result.password=None ## DO NOT SEND PASSWORDS TO ANYBODY WHO ASKS
-        return result
+    with users_lock:
+        user = users[UUID]
+        return {"username": user.username, "UUID": user.UUID, "role": user.role}
+        ## DO NOT SEND PASSWORDS TO ANYBODY WHO ASKS -- password hash is
+        ## intentionally left out of this dict.
+
+def get_user_by_credentials(username, password):
+    """
+    J1: Looks up a user by username and verifies the supplied plaintext
+    password against the stored bcrypt hash. Returns a safe (no password)
+    dict on success, or None on any failure (unknown user OR wrong
+    password) -- callers must not be able to distinguish the two, or that
+    becomes a username-enumeration side channel.
+    """
+    global users
+    with users_lock:
+        match = next((u for u in users.values() if u.username == username), None)
+    if match is None:
+        return None
+    if not verify_password(password, match.password):
+        return None
+    return {"username": match.username, "UUID": match.UUID, "role": match.role}
 
 def verify_answer(UUID, idx_of_trivia_set, question_idx, answer):
     global trivia_sets
@@ -100,7 +125,7 @@ def verify_answer(UUID, idx_of_trivia_set, question_idx, answer):
             trivia_sets[idx_of_trivia_set].analytics[question_idx]['correct']+=1
         else:
             trivia_sets[idx_of_trivia_set].analytics[question_idx]['incorrect']+=1
-        trivia_sets[idx_of_trivia_set].analytics['responses']+=[(UUID, answer)]
+        trivia_sets[idx_of_trivia_set].analytics[question_idx]['responses']+=[(UUID, answer)]
         return result
 
 
@@ -110,13 +135,19 @@ def new_trivia_set(trivia_json):
         trivia_sets+=[TriviaSet(trivia_json)]
         return len(trivia_sets)-1
 
-def register_user(username, password):
+def register_user(username, password, role="student"):
+    """
+    J1: password arrives here as plaintext from the client (over HTTPS)
+    and is hashed with bcrypt before anything touches storage or memory
+    longer-term. The plaintext value itself is never stored.
+    """
     global users
     with users_lock:
         if any(map(lambda x: x.username==username, users.values())):
             return "username already taken"
         new_uuid = uuid.uuid4().hex
-        users[new_uuid]=User(username, password, new_uuid)
+        password_hash = hash_password(password)
+        users[new_uuid]=User(username, password_hash, new_uuid, role)
         return new_uuid
 
 
@@ -131,14 +162,8 @@ trivia_data_server.register('verify_answer', verify_answer)
 trivia_data_server.register('new_trivia_set', new_trivia_set)
 trivia_data_server.register('register_user', register_user)
 trivia_data_server.register('get_user', get_user)
+trivia_data_server.register('get_user_by_credentials', get_user_by_credentials)
 trivia_data_server.register('get_analytics', get_analytics)
 
 server= trivia_data_server.get_server()
 server.serve_forever()
-
-
-
-
-
-
-
