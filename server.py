@@ -2,6 +2,7 @@ from flask import Flask, session, request, jsonify, Response, render_template
 from multiprocessing.managers import BaseManager
 import secrets
 import time
+import os
 
 # --- Security & Reliability integration (Jordan) ---------------------------
 # security.py and reliability.py must sit next to this file (or be installed
@@ -16,7 +17,7 @@ from reliability import record_heartbeat, save_reconnect_state, load_reconnect_s
 # -----------------------------------------------------------------------------
 
 app= Flask(__name__)
-app.secret_key = secrets.token_urlsafe(16)
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-stable-secret-key-cs3825')
 
 
 trivia_data_server=BaseManager(('localhost', 5555), b'trivia')
@@ -137,11 +138,12 @@ def create_user(): # should recieve {'username':"asldjad", "password":"alsdjoa",
     role = user_info.get('role', 'student')  # default to the lower-privilege role
     # NOTE: register_user (trivia-manager.py) is responsible for calling
     # security.hash_password() before storing this -- never store plaintext.
-    result = str(trivia_data_server.register_user(username, password, role))
+    raw_result = trivia_data_server.register_user(username, password, role)
+    result = str(_unwrap(raw_result))
     if result=="username already taken":
-        return Response(str(result), 409)
+        return Response(result, status=409)
     issue_login_session(result, role)  # sets session['UUID'], session['role'], etc.
-    return Response('new user created!', 201)
+    return Response('new user created!', status=201)
 
 @app.route("/api/login", methods=["POST"])
 def login():  # should receive {'username':..., 'password':...}
