@@ -100,6 +100,60 @@
       "auth": ["login"],
       "success": {"status": 200, "body": {"idx_of_trivia_set": 0, "question_idx": 0}},
       "error": {"status": 404, "body": {"error": "no saved progress for this session"}}
+    },
+    {
+      "name": "CREATE_ROOM",
+      "method": "POST",
+      "path": "/api/rooms",
+      "purpose": "Teacher opens a 4-digit PIN lobby for a trivia set",
+      "auth": ["teacher"],
+      "required_fields": ["idx_of_trivia_set"],
+      "optional_fields": ["pacing_mode"],
+      "success": {"status": 201, "body": {"room_code": "4821", "status": "waiting"}},
+      "error": {"status": 404, "body": {"error": "trivia set not found"}}
+    },
+    {
+      "name": "JOIN_ROOM",
+      "method": "POST",
+      "path": "/api/rooms/join",
+      "purpose": "Student joins a lobby by room PIN",
+      "auth": ["login"],
+      "required_fields": ["room_code"],
+      "success": {"status": 200, "body": {"room_code": "4821", "player_count": 2}},
+      "error": {"status": 404, "body": {"error": "room not found"}}
+    },
+    {
+      "name": "GET_ROOM",
+      "method": "GET",
+      "path": "/api/rooms/<room_code>",
+      "purpose": "Poll lobby roster and status",
+      "auth": ["login"],
+      "success": {"status": 200, "body": {"status": "waiting|active", "players": []}}
+    },
+    {
+      "name": "START_ROOM",
+      "method": "POST",
+      "path": "/api/rooms/<room_code>/start",
+      "purpose": "Host starts the game (waiting -> active)",
+      "auth": ["teacher"],
+      "success": {"status": 200, "body": {"status": "active"}}
+    },
+    {
+      "name": "LEAVE_ROOM",
+      "method": "POST",
+      "path": "/api/rooms/leave",
+      "purpose": "Leave the current lobby",
+      "auth": ["login"],
+      "success": {"status": 200}
+    },
+    {
+      "name": "LOCK_ROOM",
+      "method": "POST",
+      "path": "/api/rooms/<room_code>/lock",
+      "purpose": "Host blocks or allows new joiners",
+      "auth": ["teacher"],
+      "required_fields": ["locked"],
+      "success": {"status": 200, "body": {"locked": true}}
     }
   ],
   "internal_channel": {

@@ -27,6 +27,13 @@ trivia_data_server.register('register_user')
 trivia_data_server.register('get_user')
 trivia_data_server.register('get_user_by_credentials')  # was missing -- login() needs this
 trivia_data_server.register('get_analytics')
+# Darren: game-room lobby RPCs (shared across hosts via trivia-manager)
+trivia_data_server.register('create_room')
+trivia_data_server.register('join_room')
+trivia_data_server.register('get_room')
+trivia_data_server.register('start_room')
+trivia_data_server.register('leave_room')
+trivia_data_server.register('set_room_locked')
 
 
 def _connect_with_retry(manager, attempts=10, delay_seconds=1.0):
@@ -77,7 +84,12 @@ def get_trivia():
         result = _unwrap(trivia_data_server.get_trivia(session['idx_of_trivia_set'], session['question_idx']))
         if(result):
             # Snapshot progress on every fetch so a dropped client can resume here.
-            save_reconnect_state(session['UUID'], session['idx_of_trivia_set'], session['question_idx'])
+            save_reconnect_state(
+                session['UUID'],
+                session['idx_of_trivia_set'],
+                session['question_idx'],
+                room_code=session.get('room_code'),
+            )
             return jsonify(result)
         else:
             return "Error in getting the next question.", 500
@@ -190,4 +202,128 @@ def reconnect():
         return jsonify({"error": "no saved progress for this session"}), 404
     session['idx_of_trivia_set'] = state['idx_of_trivia_set']
     session['question_idx'] = state['question_idx']
+    if state.get('room_code'):
+        session['room_code'] = state['room_code']
     return jsonify(state)
+
+
+# --- Game room lobbies (Darren) ---------------------------------------------
+
+def _lobby_error(result):
+    """Map lobby error strings from trivia-manager to HTTP responses."""
+    mapping = {
+        "trivia set not found": 404,
+        "host not found": 404,
+        "player not found": 404,
+        "room not found": 404,
+        "room has ended": 409,
+        "room is locked": 403,
+        "only the host can start the room": 403,
+        "only the host can lock the room": 403,
+    }
+    status = mapping.get(result, 400)
+    return jsonify({"error": result}), status
+
+
+def _apply_room_to_session(room_view):
+    """Bind the Flask session to a lobby so GET /api/trivia uses that quiz."""
+    session['room_code'] = room_view['room_code']
+    session['idx_of_trivia_set'] = room_view['idx_of_trivia_set']
+    session['question_idx'] = room_view.get('question_idx', 0)
+    save_reconnect_state(
+        session['UUID'],
+        session['idx_of_trivia_set'],
+        session['question_idx'],
+        room_code=session['room_code'],
+    )
+
+
+@app.route("/api/rooms", methods=["POST"])
+@require_role("teacher")
+def create_room():
+    """
+    CREATE_ROOM -- teacher opens a lobby for a trivia set.
+    Body: {"idx_of_trivia_set": 0, "pacing_mode": "self"|"host"}
+    """
+    body = request.get_json(silent=True) or {}
+    if "idx_of_trivia_set" not in body:
+        return jsonify({"error": "idx_of_trivia_set is required"}), 400
+    result = _unwrap(trivia_data_server.create_room(
+        session['UUID'],
+        body['idx_of_trivia_set'],
+        body.get('pacing_mode', 'self'),
+    ))
+    if isinstance(result, str):
+        return _lobby_error(result)
+    _apply_room_to_session(result)
+    return jsonify(result), 201
+
+
+@app.route("/api/rooms/join", methods=["POST"])
+@require_login
+def join_room():
+    """
+    JOIN_ROOM -- student enters a 4-digit PIN from the host display.
+    Body: {"room_code": "4821"}
+    """
+    body = request.get_json(silent=True) or {}
+    room_code = body.get('room_code')
+    if not room_code:
+        return jsonify({"error": "room_code is required"}), 400
+    result = _unwrap(trivia_data_server.join_room(room_code, session['UUID']))
+    if isinstance(result, str):
+        return _lobby_error(result)
+    _apply_room_to_session(result)
+    return jsonify(result), 200
+
+
+@app.route("/api/rooms/<room_code>", methods=["GET"])
+@require_login
+def get_room(room_code):
+    """GET_ROOM -- poll lobby roster / status (waiting vs active)."""
+    result = _unwrap(trivia_data_server.get_room(room_code))
+    if result is None:
+        return jsonify({"error": "room not found"}), 404
+    return jsonify(result), 200
+
+
+@app.route("/api/rooms/<room_code>/start", methods=["POST"])
+@require_role("teacher")
+def start_room(room_code):
+    """START_ROOM -- host flips the lobby from waiting to active."""
+    result = _unwrap(trivia_data_server.start_room(room_code, session['UUID']))
+    if isinstance(result, str):
+        return _lobby_error(result)
+    _apply_room_to_session(result)
+    return jsonify(result), 200
+
+
+@app.route("/api/rooms/leave", methods=["POST"])
+@require_login
+def leave_room():
+    """LEAVE_ROOM -- drop out of the current session lobby."""
+    room_code = session.get('room_code')
+    if not room_code:
+        body = request.get_json(silent=True) or {}
+        room_code = body.get('room_code')
+    if not room_code:
+        return jsonify({"error": "not in a room"}), 400
+    result = _unwrap(trivia_data_server.leave_room(room_code, session['UUID']))
+    if isinstance(result, str):
+        return _lobby_error(result)
+    session.pop('room_code', None)
+    return jsonify(result), 200
+
+
+@app.route("/api/rooms/<room_code>/lock", methods=["POST"])
+@require_role("teacher")
+def lock_room(room_code):
+    """LOCK_ROOM -- host blocks new joiners (frontend Lock Room button)."""
+    body = request.get_json(silent=True) or {}
+    locked = body.get('locked', True)
+    result = _unwrap(trivia_data_server.set_room_locked(
+        room_code, session['UUID'], locked
+    ))
+    if isinstance(result, str):
+        return _lobby_error(result)
+    return jsonify(result), 200

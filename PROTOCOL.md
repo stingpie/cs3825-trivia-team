@@ -252,6 +252,65 @@ HTTP `404`.
 
 ---
 
+### 2.10 CREATE_ROOM
+
+**Purpose:** Teacher opens a game lobby bound to a trivia set and gets a
+4-digit PIN for students to join (matches the frontend Host / Join Room UI).
+
+**Endpoint:** `POST /api/rooms`  
+**Auth:** logged-in `teacher` role
+
+**Required fields:**
+```json
+{ "idx_of_trivia_set": 0, "pacing_mode": "self" }
+```
+`pacing_mode` is optional (`"self"` | `"host"`).
+
+**Success response:** HTTP `201`
+```json
+{
+  "room_code": "4821",
+  "host_uuid": "...",
+  "status": "waiting",
+  "player_count": 1,
+  "players": [{"UUID": "...", "username": "ms_smith", "role": "teacher"}]
+}
+```
+
+**Error responses:** `404` trivia set / host not found; `401` / `403` auth.
+
+---
+
+### 2.11 JOIN_ROOM
+
+**Purpose:** Student enters the host's PIN to join the lobby.
+
+**Endpoint:** `POST /api/rooms/join`  
+**Auth:** logged-in session
+
+**Required fields:**
+```json
+{ "room_code": "4821" }
+```
+
+**Success response:** HTTP `200` — same public room shape as CREATE_ROOM.  
+Session is bound to that trivia set / room for later GET_QUESTION calls.
+
+**Error responses:** `404` room not found; `403` room locked; `409` ended.
+
+---
+
+### 2.12 GET_ROOM / START_ROOM / LEAVE_ROOM / LOCK_ROOM
+
+| Message | Endpoint | Purpose |
+|---|---|---|
+| GET_ROOM | `GET /api/rooms/<code>` | Poll roster and status |
+| START_ROOM | `POST /api/rooms/<code>/start` | Host flips `waiting` → `active` |
+| LEAVE_ROOM | `POST /api/rooms/leave` | Leave current lobby |
+| LOCK_ROOM | `POST /api/rooms/<code>/lock` | Host blocks new joiners |
+
+---
+
 ## 3. Quiz JSON Schema (application payload)
 
 A trivia set is a JSON array. Each element is one of:
@@ -304,8 +363,14 @@ Student                         Server                         Teacher
    |                              |------- {role:teacher} ------->|
    |                              |<------ CREATE_TRIVIA + HMAC --|
    |                              |------- set index "0" -------->|
+   |                              |<------ CREATE_ROOM -----------|
+   |                              |------- PIN "4821" ----------->|
    |--- LOGIN ------------------->|                               |
    |<-- {role:student} -----------|                               |
+   |--- JOIN_ROOM {4821} -------->|                               |
+   |<-- lobby roster -------------|                               |
+   |                              |<------ START_ROOM ------------|
+   |                              |------- status=active -------->|
    |--- GET_QUESTION ------------>|                               |
    |<-- question (no key) --------|                               |
    |--- SUBMIT_ANSWER + HMAC ---->|                               |
