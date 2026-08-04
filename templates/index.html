@@ -730,16 +730,12 @@
         </div>
       </div>
 
-      <!-- Host Toolbar Controls: mute/lock are purely visual toggles,
-           "Chart View" is a placeholder. "Start Session" flips the room
-           from waiting -> active via POST /api/rooms/<code>/start
-           (host-only). "End Session" tells the backend the host left
+      <!-- Host Toolbar Controls: "Start Session" flips the room from
+           waiting -> active via POST /api/rooms/<code>/start (host-only).
+           "End Session" tells the backend the host left
            (POST /api/rooms/leave), which ends the room for everyone. -->
       <div class="host-toolbar">
         <button class="host-tool-btn" id="host-start-session-btn" onclick="handleStartRoom()" style="display:none;">▶️ Start Session</button>
-        <button class="host-tool-btn" onclick="toggleAudioMute(this)">🔊 Audio: On</button>
-        <button class="host-tool-btn" onclick="toggleRoomLock(this)">🔓 Lock Room</button>
-        <button class="host-tool-btn" onclick="showCustomToast('📊 Live Distribution Chart Toggled')">Chart View</button>
         <button class="host-tool-btn" style="color: var(--accent-red);" onclick="handleEndSession()">End Session</button>
       </div>
 
@@ -766,11 +762,12 @@
         </div>
       </div>
 
-      <!-- Populated by pollRoomStandings(), which polls
-           GET /api/rooms/<room_code> every 3s while this view is active and
-           renders lobby.py's public_room_view() player list (username,
-           role). Score/progress per player isn't exposed by the room API,
-           so that column stays as a placeholder note. -->
+      <!-- Populated by pollRoomStandings(), which polls both
+           GET /api/rooms/<room_code> (roster) and
+           GET /api/rooms/<room_code>/connectivity (heartbeat-based
+           online/offline status) every 3s while this view is active.
+           Score/progress per player isn't exposed by the room API, so
+           that column stays as a placeholder note. -->
       <label>Live Player Standings</label>
       <table class="history-table">
         <thead>
@@ -778,12 +775,13 @@
             <th>Rank</th>
             <th>Player</th>
             <th>Role</th>
+            <th>Status</th>
             <th>Score / Progress</th>
           </tr>
         </thead>
         <tbody id="host-standings-tbody">
           <tr>
-            <td colspan="4" style="text-align: center; color: var(--text-muted);">Waiting for players to join room...</td>
+            <td colspan="5" style="text-align: center; color: var(--text-muted);">Waiting for players to join room...</td>
           </tr>
         </tbody>
       </table>
