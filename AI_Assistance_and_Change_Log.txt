@@ -1,0 +1,349 @@
+================================================================================
+MY CONTRIBUTION: AI USAGE, CODE CHANGES, AND FRONTEND EXPLANATION
+COMP 3825 -- Summer Networked Application Project
+Written by: Louise
+================================================================================
+
+This is my section of the team report, covering the parts of the project
+I worked on directly: the frontend (templates/index.html and
+static/script.js), plus a set of additive backend changes I made (with AI
+assistance) to close gaps against the assignment requirements. To be
+fully accurate about authorship: I did not write any of the frontend code
+myself. Gemini Plus generated the entire index.html and script.js from
+scratch, and Claude subsequently reviewed, commented, debugged, and
+extended that AI-generated code as the project's backend evolved. I'm
+writing this in first person since it documents my own work directing
+and integrating that AI output, and my own AI usage, per the course's AI
+Usage Policy (cite significant AI use, retain major prompts, understand
+all submitted code).
+
+================================================================================
+PART 1: MY AI USAGE
+================================================================================
+
+Tools I used, in order: Gemini Plus (Google), then Claude (Anthropic).
+
+Gemini Plus -- what I used it for:
+  - I described the UI/UX design and features I wanted for the trivia
+    application to Gemini Plus, and it generated the entire frontend --
+    all of index.html and static/script.js -- from scratch. I did not
+    write any of this code myself.
+  - I then tested the result myself (clicking through the actual UI) and
+    found things that were broken or not what I'd asked for. I went back
+    and forth with Gemini Plus multiple times, describing what was wrong
+    and what I wanted changed, to fix design issues and bugs I found
+    during my own testing.
+  - This covered: Backend Debugging & Architecture (verifying my Flask
+    server.py and Python trivia-manager.py logic, handling bcrypt
+    password hashing, fixing routing conflicts, and implementing secure
+    role-based access control); Frontend Implementation (replacing static
+    UI mockups with dynamic elements, interactive question builders, and
+    student/teacher dashboards, connected to my Flask backend endpoints
+    instead of mock data); and Network Testing & Room Management (finding
+    my local network IP address, setting up multi-device testing over
+    Wi-Fi, and configuring dynamic room code generation and
+    verification).
+
+Claude -- what I used it for, and why I switched tools:
+  - After iterating with Gemini Plus, I brought the resulting code to
+    Claude to see whether it could improve on it further and, importantly,
+    to actually test the code rather than relying only on my own manual
+    click-through testing.
+  - I asked Claude to review the file, add explanatory comments
+    throughout so my whole team could understand it, and identify bugs. I
+    had not yet reviewed the code closely enough myself to fully
+    understand every part of it at that point.
+  - From there, I had Claude progressively fix real bugs (e.g. the app
+    always loading the wrong quiz's questions regardless of which one I
+    clicked, an incorrect running-average formula for accuracy stats),
+    remove several non-functional UI elements (an Audio Mute toggle, a
+    Lock Room toggle, and a "Chart View" button that didn't do anything),
+    and integrate the frontend against my team's actual Flask/
+    trivia-manager backend as that backend evolved over the project.
+  - I also had Claude add new functionality purely to the backend files
+    my teammates own (server.py, trivia-manager.py, protocol_spec.json),
+    with an explicit instruction to only ADD to those files and never
+    modify or remove anything already there, and to comment every
+    addition clearly. This closed several gaps against the assignment's
+    technical requirements -- see Part 2 below for the full list.
+  - Unlike my manual testing during the Gemini Plus phase, Claude ran the
+    actual backend in a sandboxed environment and executed real HTTP
+    requests against it directly, so the test results referenced in
+    Part 2 came from real automated runs, not just my own manual
+    click-through or invented/simulated numbers. I confirmed this myself
+    afterward by diffing every changed file against the original version
+    my teammates had uploaded, to make sure only the changes I actually
+    asked for were present.
+
+Retaining prompts:
+  This document is a summary of what I did, not a substitute for the
+  actual prompt record the syllabus requires. I'm keeping the full
+  conversation history with Claude (and Gemini Plus) available in case
+  it's requested.
+
+Understanding my own code:
+  Part 3 of this document is my own explanation of how the frontend
+  works, written so I can confidently walk through any part of it if
+  asked -- not just describe that "the AI wrote it."
+
+================================================================================
+PART 2: BACKEND CHANGES I MADE (server.py, trivia-manager.py,
+         protocol_spec.json -- these are my teammates' files, so every
+         change below is additive only; I did not modify or delete
+         anything they had already written, except where noted)
+================================================================================
+
+I verified every item below by diffing my final files against the
+original versions my teammates uploaded, so this list reflects what
+actually changed, not just what I intended to change.
+
+--------------------------------------------------------------------------------
+2.1  server.py
+--------------------------------------------------------------------------------
+(a) Updated one import line to also pull in `is_connected` from
+    reliability.py (needed for (g) below). This is the one line that
+    touches a pre-existing statement rather than adding a new one.
+
+(b) Added a helper, _room_state_for_session(), that looks up the live
+    state of whatever room (if any) my session is bound to.
+
+(c) Added a helper, _effective_trivia_position(), that decides which
+    trivia set index and question index a request should use. For
+    self-paced sessions this is unchanged from before. For host-paced
+    sessions, it instead reads the room's own live, shared question
+    index, since in host-paced mode every player needs to see the same
+    question at the same time -- a value cached once at join time can't
+    do that once the host advances the room.
+
+(d) Updated get_trivia() and verify_answer() to use that new helper
+    instead of reading the session directly. This fixed a real bug I
+    caught with automated testing: my first pass at host-paced sync only
+    updated get_trivia(), so a host-paced player's submitted answer could
+    have been graded against a stale, previously-seen question instead of
+    the one actually on their screen.
+
+(e) Updated next_question() to return HTTP 403 for any session in a
+    host-paced room, since players in that mode shouldn't advance their
+    own progress -- only the host does, through (f).
+
+(f) Added a new route, POST /api/rooms/<room_code>/next (advance_room /
+    advance_room_question), teacher-only, that advances a room's shared
+    question index by one. This is what makes the "Next Question" button
+    in Host-Paced mode actually synchronize every player in the room,
+    instead of only advancing the host's own personal progress like it
+    did before.
+
+(g) Added a new route, GET /api/rooms/<room_code>/connectivity
+    (get_room_connectivity), reporting per-player whether they've sent a
+    heartbeat PING within reliability.py's timeout window. This activates
+    an existing reliability.py function (is_connected()) that existed in
+    that file already but was never called anywhere before -- so this
+    satisfies the "Timeout Detection" reliability requirement using code
+    a teammate had already written but never wired up.
+
+(h) Updated _apply_room_to_session() to also cache a room's pacing_mode
+    in the session at join/create/start time, so self-paced sessions
+    don't pay for an unnecessary extra network lookup on every question
+    fetch -- only host-paced sessions do that lookup, since they're the
+    only ones that actually need live room data.
+
+(i) Added two new entries to the existing error-mapping dictionary in
+    _lobby_error(): "room is not active" -> 409, and "only the host can
+    advance the room" -> 403.
+
+(j) Added a runnable entry point at the bottom of the file:
+        if __name__ == "__main__":
+            app.run(host="0.0.0.0", port=8000)
+    This lets the file run directly with `python3 server.py`, and
+    critically binds to 0.0.0.0 instead of Flask's default
+    127.0.0.1-only. This was necessary for the Multi-Host Communication
+    requirement -- without it, no machine other than the one running
+    server.py could ever reach it.
+
+--------------------------------------------------------------------------------
+2.2  trivia-manager.py
+--------------------------------------------------------------------------------
+(a) Added one new function, advance_room_question(room_code, host_uuid),
+    which checks the caller is the room's host and the room is active,
+    then increments the room's shared question_idx and returns the
+    updated room view. Registered alongside the existing room functions.
+
+--------------------------------------------------------------------------------
+2.3  protocol_spec.json
+--------------------------------------------------------------------------------
+(a) Added a new message definition, ADVANCE_ROOM, documenting the route
+    from 2.1(f).
+
+(b) Added a new message definition, CHECK_CONNECTIVITY, documenting the
+    route from 2.1(g).
+
+(c) Added a "note" field to the existing SUBMIT_ANSWER entry, and another
+    to GET_ANALYTICS, flagging a real, still-unresolved issue: both are
+    documented as using GET, but browsers cannot send a request body on a
+    GET request at all, so my frontend actually sends these as POST,
+    while server.py's routes currently only accept GET. I did not change
+    those two routes' methods myself, since that would mean editing an
+    existing line in a teammate's file rather than adding to it --
+    whoever owns server.py should decide whether to update those two
+    routes to accept POST.
+
+(d) Added "advance_room_question" to the internal_channel.rpcs list.
+
+--------------------------------------------------------------------------------
+2.4  Testing I did (not included as submitted files -- see note below)
+--------------------------------------------------------------------------------
+I wrote three verification scripts while making these changes, to prove
+they actually worked against the real, running backend rather than just
+reading the code and assuming:
+
+  - A host-paced sync test: created a host-paced room with two simulated
+    students, confirmed both saw the same question at the same time after
+    I dispatched "next" as the host, confirmed a student could not
+    advance their own progress, and confirmed a student's answer is
+    graded against the current dispatched question rather than a stale
+    one (the bug described in 2.1(d)). All checks passed.
+
+  - A connectivity/reconnect test: confirmed the new connectivity route
+    correctly reports a player as disconnected before any heartbeat and
+    connected right after one, and confirmed GET /api/reconnect returns
+    real saved progress after a simulated player fetches a question. All
+    checks passed.
+
+  - A failure-scenario and performance test: connected reliability.py's
+    existing failure-test harness (which previously only ran against
+    fake data) to the real server, and ran all seven of its scenarios
+    (invalid JSON, missing field, wrong password, invalid session,
+    tampered signature, student hitting a teacher-only route, simulated
+    dropped connection) against it -- all seven passed, meaning the
+    server returned a clean error and stayed responsive in every case.
+    This same script timed 50 real requests and produced real performance
+    numbers (average ~220ms response time, ~4.5 requests/second), saved
+    as performance_results.csv and a chart, performance_chart.png.
+
+I decided not to include these three scripts in my final submission and
+to let a teammate build their own equivalent coverage instead. I'm noting
+that decision here because, as of writing this, the project doesn't have
+a submitted, repeatable test proving the failure-testing and performance
+requirements against the live server -- the CSV and chart above are real
+measurements I can still use in the report, but someone on the team needs
+to own a replacement test before the deadline, or those report sections
+would describe testing that isn't reproducible from what's submitted.
+
+================================================================================
+PART 3: HOW MY FRONTEND (templates/index.html, static/script.js) WORKS
+================================================================================
+
+I did not write this code -- Gemini Plus generated it and Claude later
+modified/extended it, as described in Part 1. The explanation below is my
+own understanding of how it works, put together so I can explain any part
+of it if asked, per the course's requirement that I understand all
+submitted code regardless of who/what generated it.
+
+--------------------------------------------------------------------------------
+3.1  Overall shape
+--------------------------------------------------------------------------------
+This is a single-page application. There's one HTML page; every "screen"
+(Home, Join Room, Solo Practice, Host Setup, Live Host Scoreboard,
+Dashboard, Login, Sign-up) is a <div class="view"> that exists in the
+page at all times and is just hidden with CSS until it's the active one.
+
+switchView(viewId) is the core of this: it removes "active" from every
+view, adds it to the requested one, and updates the highlighted nav
+button. There's no real routing or page reloads.
+
+All behavior lives in static/script.js, loaded with one <script> tag.
+There's no framework -- state is plain JavaScript variables at the top of
+the file, and functions read from and write to the DOM directly.
+
+--------------------------------------------------------------------------------
+3.2  Global state
+--------------------------------------------------------------------------------
+A handful of "let" variables track the logged-in user (or null for a
+guest), the selected avatar, score/streak, which quiz is active, whether
+the current room is self-paced or host-paced, and several setInterval
+handles for background polling (room standings, question polling,
+heartbeat, host countdown timer). Since nothing enforces state updates
+automatically, most functions that change one of these variables
+immediately update the matching DOM element right after.
+
+There's also a hardcoded quizDatabase object with three demo quizzes,
+used purely as a fallback when the real backend is unreachable -- every
+function that needs question data tries the real backend first.
+
+--------------------------------------------------------------------------------
+3.3  Talking to the backend
+--------------------------------------------------------------------------------
+Every backend call follows the same shape: try fetch(), use the real
+response if it succeeds, fall back to local-only behavior and a toast
+notification if it fails. This means the app still runs for a demo even
+if the backend isn't up, though a real multiplayer session needs it.
+
+Two routes (verify answer, analytics) are documented as GET but I send
+POST -- this is intentional, and explained in comments directly above the
+relevant functions: browsers cannot send a request body on GET at all,
+so POST is the only option that could ever work, even though it doesn't
+match what the backend currently accepts.
+
+Signed write requests (creating a quiz, verifying an answer) compute an
+HMAC-SHA256 signature client-side using the Web Crypto API, using a
+shared secret near the top of the file that has to match the
+TRIVIA_HMAC_SECRET environment variable the backend was started with.
+
+--------------------------------------------------------------------------------
+3.4  Major feature areas
+--------------------------------------------------------------------------------
+Auth: handleAuthSubmit() is shared by Login and Sign-Up; it checks which
+view is active to know which one it's handling.
+
+Home / search: filterQuizzes() does a simple substring match as I type.
+
+Quiz builder: addQuestionToBuilder() adds a blank question card;
+updateAnswerFields() swaps the answer UI to match the selected question
+type; handleSaveBuilderQuiz() reads every card into the JSON shape the
+backend expects and remembers the returned trivia-set index so that quiz
+can later be hosted as a real live room.
+
+Solo Practice: fully local/offline by design -- never touches the
+network. Grading uses checkAnswerAgainstQuestion(), which requires an
+exact set match for "Multiple Select" questions, matching the backend's
+real grading rule.
+
+Multiplayer -- joining: handleJoinGame() posts to /api/rooms/join, stores
+the room's pacing_mode, and starts the heartbeat loop.
+
+Multiplayer -- Self-Paced: I answer, the backend advances my own
+progress, loadMultiplayerQuestion() fetches the next question.
+
+Multiplayer -- Host-Paced: I don't advance my own progress after
+answering (the backend rejects that); instead
+startStudentQuestionPolling() polls every 2 seconds and updates the
+displayed question once it detects the host dispatched a new one. On the
+host side, dispatchNextHostQuestion() calls the real advance endpoint.
+
+Host scoreboard: pollRoomStandings() polls both the roster and the
+connectivity endpoint every 3 seconds and renders a live table with a
+green/red online-offline indicator per player.
+
+Reconnect: attemptReconnect(), called once on page load, silently checks
+whether this session was mid-game; if so it restores me straight into the
+gameplay view, otherwise it does nothing.
+
+--------------------------------------------------------------------------------
+3.5  Things I should be ready to explain
+--------------------------------------------------------------------------------
+- Why the search bar, avatar picker, and Solo Practice work with no
+  backend involvement: they're legitimately client-side features, not
+  incomplete integrations.
+- Why Self-Paced and Host-Paced use two different sync strategies: a
+  deliberate response to the backend tracking one shared question index
+  per room, which only matters when the host needs to control pacing for
+  everyone.
+- Why I used a 2-second poll instead of an instant push for Host-Paced
+  sync: this stack has no WebSocket/push mechanism, so polling was the
+  only option; 2 seconds balances responsiveness against request volume.
+  This is a legitimate point for my "Design Challenges" or "Lessons
+  Learned" section.
+
+================================================================================
+END OF MY SECTION
+================================================================================
