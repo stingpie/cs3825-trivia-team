@@ -1,0 +1,119 @@
+{
+  "protocol_name": "TriviaTeam JSON Application Protocol",
+  "author": "Darren Robinson",
+  "transport": "HTTP/1.1 over TCP",
+  "encoding": "UTF-8 JSON",
+  "session": "Flask signed cookie (UUID, role, idx_of_trivia_set, question_idx)",
+  "integrity_header": "X-Signature (HMAC-SHA256 hex of raw body)",
+  "heartbeat": {
+    "interval_seconds": 5,
+    "timeout_seconds": 15,
+    "ping": {"type": "PING", "timestamp": "unix_seconds"},
+    "pong": {"type": "PONG", "timestamp": "unix_seconds"}
+  },
+  "messages": [
+    {
+      "name": "REGISTER_USER",
+      "method": "POST",
+      "path": "/api/users",
+      "purpose": "Create a student or teacher account",
+      "required_fields": ["username", "password"],
+      "optional_fields": ["role"],
+      "success": {"status": 201, "body": "new user created!"},
+      "error": {"status": 409, "body": "username already taken"}
+    },
+    {
+      "name": "LOGIN",
+      "method": "POST",
+      "path": "/api/login",
+      "purpose": "Authenticate and establish a session",
+      "required_fields": ["username", "password"],
+      "success": {"status": 200, "body": {"role": "student|teacher"}},
+      "error": {"status": 401, "body": {"error": "invalid username or password"}}
+    },
+    {
+      "name": "CREATE_TRIVIA",
+      "method": "POST",
+      "path": "/api/trivia",
+      "purpose": "Teacher uploads a quiz JSON array",
+      "auth": ["teacher", "valid_signature"],
+      "required_fields": ["JSON array of question objects"],
+      "success": {"status": 200, "body": "trivia set index string"},
+      "error": [
+        {"status": 401, "body": {"error": "not authenticated"}},
+        {"status": 403, "body": {"error": "forbidden: insufficient role"}},
+        {"status": 400, "body": {"error": "invalid or missing payload signature"}}
+      ]
+    },
+    {
+      "name": "GET_QUESTION",
+      "method": "GET",
+      "path": "/api/trivia",
+      "purpose": "Fetch current question without the answer key",
+      "auth": ["login"],
+      "required_fields": ["session.idx_of_trivia_set", "session.question_idx"],
+      "success": {"status": 200, "body": {"type": "...", "question": "..."}},
+      "error": {"status": 400, "body": "No active trivia set selected."}
+    },
+    {
+      "name": "SUBMIT_ANSWER",
+      "method": "GET",
+      "path": "/api/trivia/verify",
+      "purpose": "Grade the student's answer for the current question",
+      "auth": ["login", "valid_signature"],
+      "required_fields": ["answer"],
+      "success": {"status": 200, "body": {"correct": true}},
+      "error": {"status": 400, "body": {"error": "invalid or missing payload signature"}}
+    },
+    {
+      "name": "NEXT_QUESTION",
+      "method": "GET",
+      "path": "/api/trivia/next",
+      "purpose": "Advance one question forward (never backward)",
+      "auth": ["login"],
+      "success": {"status": 200, "body": "next question OR {done:true}"},
+      "error": {"status": 400, "body": "No active trivia set selected."}
+    },
+    {
+      "name": "GET_ANALYTICS",
+      "method": "GET",
+      "path": "/api/trivia/analytics",
+      "purpose": "Teacher views per-question stats",
+      "auth": ["teacher"],
+      "required_fields": ["idx_of_trivia_set"],
+      "success": {"status": 200, "body": [{"correct": 0, "incorrect": 0, "responses": []}]}
+    },
+    {
+      "name": "HEARTBEAT",
+      "method": "POST",
+      "path": "/api/heartbeat",
+      "purpose": "Client liveness check (PING/PONG)",
+      "auth": ["login"],
+      "required_fields": ["type", "timestamp"],
+      "success": {"status": 200, "body": {"type": "PONG", "timestamp": 0}}
+    },
+    {
+      "name": "RECONNECT",
+      "method": "GET",
+      "path": "/api/reconnect",
+      "purpose": "Restore quiz progress after a dropped connection",
+      "auth": ["login"],
+      "success": {"status": 200, "body": {"idx_of_trivia_set": 0, "question_idx": 0}},
+      "error": {"status": 404, "body": {"error": "no saved progress for this session"}}
+    }
+  ],
+  "internal_channel": {
+    "between": ["server.py", "trivia-manager.py"],
+    "address": "TCP port 5555",
+    "auth_key": "trivia",
+    "rpcs": [
+      "register_user",
+      "get_user_by_credentials",
+      "new_trivia_set",
+      "get_trivia",
+      "verify_answer",
+      "get_analytics",
+      "get_user"
+    ]
+  }
+}
