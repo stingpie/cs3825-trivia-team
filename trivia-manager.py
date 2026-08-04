@@ -206,12 +206,6 @@ def join_room(room_code, player_uuid):
             return "room not found"
         if room["status"] == "ended":
             return "room has ended"
-        if room["locked"] and player_uuid not in room["players"]:
-            return "room is locked"
-        if room["status"] == "active" and player_uuid not in room["players"]:
-            # Late joiners allowed only if not locked; they pick up at
-            # the room's shared question index for host-paced mode.
-            pass
         room["players"][player_uuid] = {
             "username": player_name,
             "role": player_role,
@@ -259,19 +253,6 @@ def leave_room(room_code, player_uuid):
         return public_room_view(code, room)
 
 
-def set_room_locked(room_code, host_uuid, locked=True):
-    global rooms
-    code = str(room_code).strip()
-    with rooms_lock:
-        room = rooms.get(code)
-        if room is None:
-            return "room not found"
-        if room["host_uuid"] != host_uuid:
-            return "only the host can lock the room"
-        room["locked"] = bool(locked)
-        return public_room_view(code, room)
-
-
 @atexit.register
 def goodbye(): #TODO: save trivia sets and users.
     pass
@@ -289,7 +270,6 @@ trivia_data_server.register('join_room', join_room)
 trivia_data_server.register('get_room', get_room)
 trivia_data_server.register('start_room', start_room)
 trivia_data_server.register('leave_room', leave_room)
-trivia_data_server.register('set_room_locked', set_room_locked)
 
 server= trivia_data_server.get_server()
 server.serve_forever()

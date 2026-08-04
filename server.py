@@ -33,7 +33,6 @@ trivia_data_server.register('join_room')
 trivia_data_server.register('get_room')
 trivia_data_server.register('start_room')
 trivia_data_server.register('leave_room')
-trivia_data_server.register('set_room_locked')
 
 
 def _connect_with_retry(manager, attempts=10, delay_seconds=1.0):
@@ -217,9 +216,7 @@ def _lobby_error(result):
         "player not found": 404,
         "room not found": 404,
         "room has ended": 409,
-        "room is locked": 403,
         "only the host can start the room": 403,
-        "only the host can lock the room": 403,
     }
     status = mapping.get(result, 400)
     return jsonify({"error": result}), status
@@ -312,18 +309,4 @@ def leave_room():
     if isinstance(result, str):
         return _lobby_error(result)
     session.pop('room_code', None)
-    return jsonify(result), 200
-
-
-@app.route("/api/rooms/<room_code>/lock", methods=["POST"])
-@require_role("teacher")
-def lock_room(room_code):
-    """LOCK_ROOM -- host blocks new joiners (frontend Lock Room button)."""
-    body = request.get_json(silent=True) or {}
-    locked = body.get('locked', True)
-    result = _unwrap(trivia_data_server.set_room_locked(
-        room_code, session['UUID'], locked
-    ))
-    if isinstance(result, str):
-        return _lobby_error(result)
     return jsonify(result), 200

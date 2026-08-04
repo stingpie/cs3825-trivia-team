@@ -157,10 +157,6 @@ def main():
         ok &= check("start room (200, status=active)",
                     status == 200 and body.get("status") == "active")
 
-        status, body = teacher("POST", f"/api/rooms/{room_code}/lock", {"locked": True})
-        ok &= check("lock room (200, locked=true)",
-                    status == 200 and body.get("locked") is True)
-
     print()
     print("ALL PASSED" if ok else "SOME CHECKS FAILED -- see [FAIL] lines above")
     sys.exit(0 if ok else 1)

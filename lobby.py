@@ -45,7 +45,6 @@ def make_room(host_uuid: str, idx_of_trivia_set: int, pacing_mode: str = "self")
         "idx_of_trivia_set": int(idx_of_trivia_set),
         "pacing_mode": pacing_mode,
         "status": "waiting",
-        "locked": False,
         "players": {},  # uuid -> {username, role, joined_at}
         "created_at": time.time(),
         "question_idx": 0,  # shared index for host-paced mode
@@ -69,7 +68,6 @@ def public_room_view(room_code: str, room: dict) -> dict:
         "idx_of_trivia_set": room["idx_of_trivia_set"],
         "pacing_mode": room["pacing_mode"],
         "status": room["status"],
-        "locked": room["locked"],
         "player_count": len(players),
         "players": players,
         "question_idx": room.get("question_idx", 0),

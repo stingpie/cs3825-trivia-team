@@ -296,18 +296,17 @@ HTTP `404`.
 **Success response:** HTTP `200` — same public room shape as CREATE_ROOM.  
 Session is bound to that trivia set / room for later GET_QUESTION calls.
 
-**Error responses:** `404` room not found; `403` room locked; `409` ended.
+**Error responses:** `404` room not found; `409` ended.
 
 ---
 
-### 2.12 GET_ROOM / START_ROOM / LEAVE_ROOM / LOCK_ROOM
+### 2.12 GET_ROOM / START_ROOM / LEAVE_ROOM
 
 | Message | Endpoint | Purpose |
 |---|---|---|
 | GET_ROOM | `GET /api/rooms/<code>` | Poll roster and status |
 | START_ROOM | `POST /api/rooms/<code>/start` | Host flips `waiting` → `active` |
 | LEAVE_ROOM | `POST /api/rooms/leave` | Leave current lobby |
-| LOCK_ROOM | `POST /api/rooms/<code>/lock` | Host blocks new joiners |
 
 ---
 

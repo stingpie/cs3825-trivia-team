@@ -145,15 +145,6 @@
       "purpose": "Leave the current lobby",
       "auth": ["login"],
       "success": {"status": 200}
-    },
-    {
-      "name": "LOCK_ROOM",
-      "method": "POST",
-      "path": "/api/rooms/<room_code>/lock",
-      "purpose": "Host blocks or allows new joiners",
-      "auth": ["teacher"],
-      "required_fields": ["locked"],
-      "success": {"status": 200, "body": {"locked": true}}
     }
   ],
   "internal_channel": {
