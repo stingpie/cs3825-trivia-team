@@ -59,6 +59,16 @@
     // shown on the host-paced scoreboard control.
     let hostQuestionIndex = 0;
 
+    // The pacing mode of the room a STUDENT is currently playing in (as
+    // returned by the join-room response), separate from `selectedPacing`
+    // above, which is the host's choice on the Host Setup screen. In
+    // "host" mode, the player doesn't advance their own question - they
+    // poll for whatever the host has dispatched (see
+    // startStudentQuestionPolling()).
+    let joinedRoomPacingMode = 'self';
+    let studentQuestionPollInterval = null;
+    let lastSeenQuestionText = null;
+
     // Heartbeat ping loop (protocol_spec.json "HEARTBEAT", every 5s while
     // a login session is active) so reliability.py can tell live players
     // apart from disconnected ones.
@@ -289,12 +299,21 @@
       return null;
     }
 
+    /**
+     * Fetches the current question from the backend. Returns the question
+     * object on success, `{ serverSignaledDone: true }` if the backend
+     * was reached but has no next question to give (session ran past the
+     * end of the trivia set), or `null` if the backend couldn't be
+     * reached at all (network failure), which is the signal callers use
+     * to fall back to local quiz data.
+     */
     async function apiFetchTriviaQuestion() {
       try {
         const response = await fetch('/api/trivia');
         if (response.ok) {
           return await response.json();
         }
+        return { serverSignaledDone: true };
       } catch(e) {
         console.log("Using fallback question logic");
       }
@@ -734,16 +753,15 @@
     }
 
     /**
-     * Handles the "Enter Lobby" form submit on the Join Room page.
-     * UPDATED to match the real lobby API in server (1).py: the route is
-     * now POST /api/rooms/join, the field is `room_code` (not `pin`), and
-     * it requires a logged-in session (@require_login) - joining as a
-     * true anonymous guest will get a 401 here. A successful join returns
-     * the full room view (see lobby.public_room_view), which the backend
-     * also uses to set session['idx_of_trivia_set']/['question_idx'] for
-     * us, so GET /api/trivia will immediately serve the right quiz.
-     * Falls back to the old local-only PIN check (against `activeRoomPin`)
-     * only when the backend is completely unreachable.
+     * Handles the "Enter Lobby" form submit on the Join Room page. Joins
+     * via POST /api/rooms/join with a `room_code` field, and requires a
+     * logged-in session (@require_login) - joining as a true anonymous
+     * guest will get a 401 here. A successful join returns the full room
+     * view (see lobby.public_room_view), which the backend also uses to
+     * set session['idx_of_trivia_set']/['question_idx'], so GET /api/trivia
+     * immediately serves the right quiz. Falls back to a local-only PIN
+     * check (against `activeRoomPin`) only when the backend is completely
+     * unreachable.
      */
     async function handleJoinGame(event) {
       event.preventDefault();
@@ -761,6 +779,7 @@
           const room = await res.json();
           activeRoomCode = room.room_code;
           isRoomHost = false;
+          joinedRoomPacingMode = room.pacing_mode || 'self';
         } else if (res.status === 401) {
           showCustomToast("⚠️ You need to be logged in to join a room - please log in or sign up first.");
           return;
@@ -776,6 +795,7 @@
         }
         activeRoomCode = null;
         isRoomHost = false;
+        joinedRoomPacingMode = 'self';
       }
 
       document.getElementById('player-avatar-display').innerText = activeAvatar.icon;
@@ -789,25 +809,42 @@
     }
 
     /**
-     * Loads the next multiplayer question, preferring the live backend
-     * (apiFetchTriviaQuestion) and falling back to `quizDatabase[activeQuizTitle]`
-     * if the API returns nothing, so a "World History Essentials" or
-     * "Web Security & Cryptography" session shows the right questions
-     * when the backend is offline.
+     * Loads the current multiplayer question from the live backend
+     * (apiFetchTriviaQuestion), falling back to `quizDatabase[activeQuizTitle]`
+     * only when the backend can't be reached at all, so a "World History
+     * Essentials" or "Web Security & Cryptography" session still shows
+     * the right questions when fully offline.
      * When a real API question is returned, the code reads `apiQ.question`
      * for the display text, while the local fallback objects use the key
      * `q.q` instead - each path reads the field name that matches its own
-     * data source.
+     * data source. In a host-paced room, this also starts
+     * startStudentQuestionPolling() so the player picks up whatever
+     * question the host dispatches next, without advancing on their own.
      */
     async function loadMultiplayerQuestion() {
       const apiQ = await apiFetchTriviaQuestion();
+      if (apiQ && apiQ.serverSignaledDone) {
+        // Reached the backend, but the session has run past the last
+        // question in the trivia set - the quiz is genuinely finished.
+        const accuracyPct = mpTotalAttempted > 0 ? Math.round((mpCorrectAnswers / mpTotalAttempted) * 100) : 100;
+        showCustomToast(`Quiz Completed! Final Score: ${currentScore}`);
+        recordGameResult(activeQuizTitle, currentScore, accuracyPct);
+        stopHeartbeat();
+        stopStudentQuestionPolling();
+        switchView('dashboard-view');
+        return;
+      }
       if (apiQ) {
         localCurrentQuestion = apiQ;
+        lastSeenQuestionText = apiQ.question;
         document.getElementById('current-question-text').innerText = apiQ.question;
         document.getElementById('ans').value = '';
         // Unlike the fallback branch below, this branch doesn't update
         // #question-progress-badge ("Question X of Y"), since the API
         // response doesn't carry a total question count.
+        if (joinedRoomPacingMode === 'host') {
+          startStudentQuestionPolling();
+        }
       } else {
         const sampleQuestions = quizDatabase[activeQuizTitle].questions;
         if (currentQuestionIndex < sampleQuestions.length) {
@@ -829,11 +866,54 @@
     }
 
     /**
+     * Polls GET /api/trivia every 2 seconds for a player in a host-paced
+     * room, and refreshes the displayed question whenever the text
+     * changes - this is how a student picks up whatever the host just
+     * dispatched via "Next Question", since players in host-paced rooms
+     * never advance their own question index (see handleAnswerSubmit()
+     * and next_question()'s 403 in server.py).
+     */
+    function startStudentQuestionPolling() {
+      stopStudentQuestionPolling();
+      studentQuestionPollInterval = setInterval(pollForHostAdvance, 2000);
+    }
+
+    function stopStudentQuestionPolling() {
+      clearInterval(studentQuestionPollInterval);
+      studentQuestionPollInterval = null;
+    }
+
+    async function pollForHostAdvance() {
+      const apiQ = await apiFetchTriviaQuestion();
+      if (!apiQ) return; // backend unreachable this tick - try again next poll
+      if (apiQ.serverSignaledDone) {
+        const accuracyPct = mpTotalAttempted > 0 ? Math.round((mpCorrectAnswers / mpTotalAttempted) * 100) : 100;
+        showCustomToast(`Quiz Completed! Final Score: ${currentScore}`);
+        recordGameResult(activeQuizTitle, currentScore, accuracyPct);
+        stopHeartbeat();
+        stopStudentQuestionPolling();
+        switchView('dashboard-view');
+        return;
+      }
+      if (apiQ.question !== lastSeenQuestionText) {
+        localCurrentQuestion = apiQ;
+        lastSeenQuestionText = apiQ.question;
+        document.getElementById('current-question-text').innerText = apiQ.question;
+        document.getElementById('ans').value = '';
+        showCustomToast('➔ The host moved everyone to the next question.');
+      }
+    }
+
+    /**
      * Handles submitting an answer during a multiplayer game.
      * Tries the server-side verify endpoint first (apiVerifyAnswer - see
      * the note there about the GET-with-body backend limitation), then
      * falls back to local grading via checkAnswerAgainstQuestion(), which
-     * requires an exact set match for "Multiple Select" questions.
+     * requires an exact set match for "Multiple Select" questions. In a
+     * host-paced room, the player does not advance to the next question
+     * themselves after answering - server.py's next_question() rejects
+     * that with a 403, so instead the poll loop started in
+     * loadMultiplayerQuestion() picks up whatever the host dispatches.
      */
     async function handleAnswerSubmit(event) {
       event.preventDefault();
@@ -861,9 +941,14 @@
       document.getElementById('player-score').innerText = currentScore;
       document.getElementById('player-streak').innerText = `🔥 ${currentStreak}x`;
 
-      await apiNextQuestion();
-      currentQuestionIndex++;
-      setTimeout(loadMultiplayerQuestion, 1200);
+      if (joinedRoomPacingMode === 'host') {
+        document.getElementById('ans').value = '';
+        showCustomToast('Waiting for the host to advance to the next question...');
+      } else {
+        await apiNextQuestion();
+        currentQuestionIndex++;
+        setTimeout(loadMultiplayerQuestion, 1200);
+      }
     }
 
     /* ---------- Solo Practice Arcade ---------- */
@@ -1165,9 +1250,10 @@
     }
 
     /**
-     * Polls GET /api/rooms/<code> every 3 seconds while the host
-     * scoreboard is open, and renders the player roster into
-     * #host-standings-tbody.
+     * Polls GET /api/rooms/<code> (roster) and
+     * GET /api/rooms/<code>/connectivity (heartbeat-based online/offline
+     * status, per player) together every 3 seconds while the host
+     * scoreboard is open, and renders both into #host-standings-tbody.
      */
     function startRoomStandingsPolling() {
       stopRoomStandingsPolling();
@@ -1183,29 +1269,44 @@
     async function pollRoomStandings() {
       if (!activeRoomCode) return;
       try {
-        const res = await fetch(`/api/rooms/${activeRoomCode}`);
-        if (!res.ok) return;
-        const room = await res.json();
-        renderRoomStandings(room);
+        const [roomRes, connRes] = await Promise.all([
+          fetch(`/api/rooms/${activeRoomCode}`),
+          fetch(`/api/rooms/${activeRoomCode}/connectivity`)
+        ]);
+        if (!roomRes.ok) return;
+        const room = await roomRes.json();
+        const connectivity = connRes.ok ? await connRes.json() : { players: [] };
+        const connectedByUuid = {};
+        connectivity.players.forEach(p => { connectedByUuid[p.UUID] = p.connected; });
+        renderRoomStandings(room, connectedByUuid);
       } catch(e) {
         // Silent - this just means the next poll will try again in 3s.
       }
     }
 
-    function renderRoomStandings(room) {
+    function renderRoomStandings(room, connectedByUuid = {}) {
       const tbody = document.getElementById('host-standings-tbody');
       if (!room.players || room.players.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Waiting for players to join room...</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Waiting for players to join room...</td></tr>`;
         return;
       }
-      tbody.innerHTML = room.players.map((p, i) => `
+      tbody.innerHTML = room.players.map((p, i) => {
+        const isConnected = connectedByUuid[p.UUID];
+        const statusHTML = isConnected === undefined
+          ? `<span style="color: var(--text-muted);">—</span>`
+          : isConnected
+            ? `<span style="color: var(--accent-green);">🟢 Online</span>`
+            : `<span style="color: var(--accent-red);">🔴 Offline</span>`;
+        return `
         <tr>
           <td>#${i + 1}</td>
           <td><strong>${p.username}</strong></td>
           <td><span class="badge" style="font-size:0.65rem;">${(p.role || 'student').toUpperCase()}</span></td>
+          <td>${statusHTML}</td>
           <td style="color: var(--text-muted);">— (backend doesn't expose per-player score yet)</td>
         </tr>
-      `).join('');
+      `;
+      }).join('');
     }
 
     /* ---------- Heartbeat (protocol_spec.json HEARTBEAT / PING-PONG) ---------- */
@@ -1250,38 +1351,43 @@
       }, 1000);
     }
 
-    /** Host-paced "Next Question" button handler: restarts the countdown (if enabled) and tells the backend to advance. */
-    function dispatchNextHostQuestion() {
+    /**
+     * Host-paced "Next Question" button handler: restarts the countdown
+     * (if enabled) and calls POST /api/rooms/<code>/next, which advances
+     * the room's shared question index server-side - every player's poll
+     * loop (see startStudentQuestionPolling()) picks up the change within
+     * a couple seconds. Only works for a real (non-local-fallback) room;
+     * local demo rooms have no backend room state to advance.
+     */
+    async function dispatchNextHostQuestion() {
       const enableTimer = document.getElementById('host-enable-timer-select').value === 'yes';
       if (enableTimer) {
         const duration = parseInt(document.getElementById('host-timer-duration').value);
         startHostTimer(duration);
       }
-      apiNextQuestion();
-      hostQuestionIndex++; // advances local progress counter
-      updateHostCurrentQuestionLabel();
-      showCustomToast("Dispatched next question to participants!");
-    }
 
-    /** Purely visual audio mute toggle for the host toolbar - does not actually mute any audio element. */
-    function toggleAudioMute(btn) {
-      if (btn.innerText.includes("On")) {
-        btn.innerText = "🔇 Audio: Off";
-        showCustomToast("Audio Muted");
-      } else {
-        btn.innerText = "🔊 Audio: On";
-        showCustomToast("Audio Enabled");
+      if (!activeRoomCode) {
+        showCustomToast("This is a local-only demo room - there's no live room to dispatch to.");
+        hostQuestionIndex++;
+        updateHostCurrentQuestionLabel();
+        return;
       }
-    }
 
-    /** Purely visual room-lock toggle for the host toolbar - does not currently prevent new joins on the backend. */
-    function toggleRoomLock(btn) {
-      if (btn.innerText.includes("Unlock") || btn.innerText.includes("🔓")) {
-        btn.innerText = "🔒 Room Locked";
-        showCustomToast("Room Locked");
-      } else {
-        btn.innerText = "🔓 Lock Room";
-        showCustomToast("Room Unlocked");
+      try {
+        const res = await fetch(`/api/rooms/${activeRoomCode}/next`, { method: 'POST' });
+        if (res.ok) {
+          hostQuestionIndex++;
+          updateHostCurrentQuestionLabel();
+          showCustomToast("Dispatched next question to participants!");
+        } else if (res.status === 403) {
+          showCustomToast("⚠️ Only the host who created this room can advance it.");
+        } else if (res.status === 409) {
+          showCustomToast("⚠️ The room isn't active yet - press Start Session first.");
+        } else {
+          showCustomToast("⚠️ Couldn't advance the question on the server.");
+        }
+      } catch(e) {
+        showCustomToast("⚠️ Server unreachable - couldn't dispatch the next question.");
       }
     }
 
@@ -1303,6 +1409,7 @@
       }
       if (viewId !== 'gameplay-view') {
         stopHeartbeat();
+        stopStudentQuestionPolling();
       }
       document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
       const target = document.getElementById(viewId);
@@ -1325,8 +1432,57 @@
       document.getElementById('theme-text').innerText = newTheme === 'dark' ? 'Dark' : 'Light';
     }
 
+    /**
+     * Reliability feature: RECONNECT (GET /api/reconnect). On page load,
+     * silently asks the backend "was this session (identified by the
+     * existing login cookie) in the middle of a multiplayer game?" - this
+     * covers the case where a player's browser tab reloads or their Wi-Fi
+     * drops and reconnects mid-quiz. Does nothing (no toast, no view
+     * change) if the person isn't logged in (401) or has no saved
+     * progress (404) - which is the normal case for most page loads.
+     * Only resumes the room-based (multiplayer) case, since that's what
+     * reliability.py's save_reconnect_state() tracks; solo practice has
+     * no server-side progress to restore.
+     */
+    async function attemptReconnect() {
+      try {
+        const res = await fetch('/api/reconnect');
+        if (!res.ok) return; // not logged in, or nothing to resume - normal case
+        const state = await res.json();
+        if (!state.room_code) return; // no room bound to this session
+
+        activeRoomCode = state.room_code;
+        currentQuestionIndex = state.question_idx || 0;
+        isRoomHost = false;
+
+        // The saved state doesn't include pacing_mode, so look it up from
+        // the room itself to decide whether this player should poll for
+        // host dispatches or advance on their own.
+        try {
+          const roomRes = await fetch(`/api/rooms/${activeRoomCode}`);
+          if (roomRes.ok) {
+            const room = await roomRes.json();
+            joinedRoomPacingMode = room.pacing_mode || 'self';
+          }
+        } catch(e) { /* falls back to 'self' if this lookup fails */ }
+
+        document.getElementById('player-avatar-display').innerText = activeAvatar.icon;
+        document.getElementById('player-name-display').innerText = 'Reconnected Player';
+        currentScore = 0; currentStreak = 0;
+        mpCorrectAnswers = 0; mpTotalAttempted = 0;
+        startHeartbeat();
+        await loadMultiplayerQuestion();
+        showCustomToast('🔄 Reconnected - resuming your previous session.');
+        switchView('gameplay-view');
+      } catch(e) {
+        // Backend unreachable - nothing to reconnect to right now.
+      }
+    }
+
     // On page load, add one blank question card to the quiz builder so
-    // the modal never opens completely empty.
+    // the modal never opens completely empty, and check whether this
+    // session has a dropped multiplayer game to resume.
     document.addEventListener('DOMContentLoaded', () => {
       addQuestionToBuilder();
+      attemptReconnect();
     });
