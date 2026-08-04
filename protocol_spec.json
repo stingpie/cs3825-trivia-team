@@ -63,7 +63,8 @@
       "auth": ["login", "valid_signature"],
       "required_fields": ["answer"],
       "success": {"status": 200, "body": {"correct": true}},
-      "error": {"status": 400, "body": {"error": "invalid or missing payload signature"}}
+      "error": {"status": 400, "body": {"error": "invalid or missing payload signature"}},
+      "note": "Documented as GET, but browsers cannot send a request body on GET/HEAD - the actual frontend sends this as POST instead. server.py's route currently only accepts GET, so this call gets a 405 from the real server until the route also accepts POST."
     },
     {
       "name": "NEXT_QUESTION",
@@ -81,7 +82,8 @@
       "purpose": "Teacher views per-question stats",
       "auth": ["teacher"],
       "required_fields": ["idx_of_trivia_set"],
-      "success": {"status": 200, "body": [{"correct": 0, "incorrect": 0, "responses": []}]}
+      "success": {"status": 200, "body": [{"correct": 0, "incorrect": 0, "responses": []}]},
+      "note": "Same GET-with-body issue as SUBMIT_ANSWER - documented as GET but reads a JSON body, which browsers cannot send on GET. The frontend sends POST instead."
     },
     {
       "name": "HEARTBEAT",
@@ -131,12 +133,34 @@
       "success": {"status": 200, "body": {"status": "waiting|active", "players": []}}
     },
     {
+      "name": "CHECK_CONNECTIVITY",
+      "method": "GET",
+      "path": "/api/rooms/<room_code>/connectivity",
+      "purpose": "Timeout-detection reliability feature: reports which players in a room have sent a heartbeat PING within reliability.py's HEARTBEAT_TIMEOUT_SECONDS window",
+      "auth": ["login"],
+      "success": {"status": 200, "body": {"room_code": "4821", "players": [{"UUID": "...", "username": "...", "connected": true}]}},
+      "error": {"status": 404, "body": {"error": "room not found"}}
+    },
+    {
       "name": "START_ROOM",
       "method": "POST",
       "path": "/api/rooms/<room_code>/start",
       "purpose": "Host starts the game (waiting -> active)",
       "auth": ["teacher"],
       "success": {"status": 200, "body": {"status": "active"}}
+    },
+    {
+      "name": "ADVANCE_ROOM",
+      "method": "POST",
+      "path": "/api/rooms/<room_code>/next",
+      "purpose": "Host-paced dispatch: host advances the room's shared question index so every player sees the same question at the same time",
+      "auth": ["teacher", "must be this room's host"],
+      "success": {"status": 200, "body": {"room_code": "4821", "question_idx": 1, "status": "active"}},
+      "error": [
+        {"status": 403, "body": {"error": "only the host can advance the room"}},
+        {"status": 409, "body": {"error": "room is not active"}},
+        {"status": 404, "body": {"error": "room not found"}}
+      ]
     },
     {
       "name": "LEAVE_ROOM",
@@ -158,7 +182,8 @@
       "get_trivia",
       "verify_answer",
       "get_analytics",
-      "get_user"
+      "get_user",
+      "advance_room_question"
     ]
   }
 }
