@@ -1,0 +1,24 @@
+# Protocol Design — paste under the “Protocol design” heading in the Google Doc
+# Author: Darren Robinson (Networking & Real-Time Sync Lead)
+# Also see PROTOCOL.md in the GitHub repo for the full message catalog.
+
+        Our system uses a custom JSON application-layer protocol carried over HTTP between browser clients and the Flask front server (server.py). Each message is a small JSON object (or array, for quiz uploads) with a fixed purpose, required fields, and documented success and error responses. Session state is kept in a signed cookie so the server always knows which user is speaking and which question they are on. Write-sensitive messages also carry an X-Signature header containing an HMAC-SHA256 digest of the raw request body, so the server can reject tampered answers or forged quiz uploads before they touch shared state.
+
+        The main client-to-server messages are: REGISTER_USER (POST /api/users) to create an account; LOGIN (POST /api/login) to authenticate and receive a role; CREATE_TRIVIA (POST /api/trivia, teacher only) to upload a quiz JSON array; GET_QUESTION (GET /api/trivia) to fetch the current question with the answer key removed; SUBMIT_ANSWER (GET /api/trivia/verify) to grade a response; NEXT_QUESTION (GET /api/trivia/next) to move forward one step; GET_ANALYTICS (GET /api/trivia/analytics, teacher only) to read per-question stats; HEARTBEAT / PING-PONG (POST /api/heartbeat) every five seconds for liveness; and RECONNECT (GET /api/reconnect) to restore progress after a dropped connection. Students can only advance through a quiz, never go backward, which is enforced by the protocol rather than by trusting the client.
+
+        A second, internal protocol runs between server.py and trivia-manager.py over Python’s multiprocessing BaseManager on TCP port 5555. That channel exposes RPCs such as register_user, get_user_by_credentials, new_trivia_set, get_trivia, verify_answer, and get_analytics. Splitting the front server from the shared data process lets multiple hosts (separate student and teacher browsers) talk to one authoritative store while still using our documented JSON messages on the public API. The full message catalog, field lists, and an example end-to-end flow are recorded in PROTOCOL.md in the project repository.
+
+Example message flow (for the report or slides):
+
+  Client --> REGISTER_USER / LOGIN
+  Server --> LOGIN_SUCCESS (role + session cookie)
+  Teacher --> CREATE_TRIVIA (+ X-Signature)
+  Server --> trivia set index
+  Student --> GET_QUESTION
+  Server --> question (answer key removed)
+  Student --> SUBMIT_ANSWER (+ X-Signature)
+  Server --> { "correct": true|false }
+  Student --> NEXT_QUESTION
+  Server --> next question OR { "done": true }
+  Student --> PING (every 5s)  /  Server --> PONG
+  Student --> RECONNECT after drop  /  Server --> saved progress

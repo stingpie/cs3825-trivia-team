@@ -2,6 +2,7 @@ from multiprocessing import Lock
 from multiprocessing.managers import BaseManager
 import atexit
 import pickle
+import time
 import uuid
 import answer_normalize
 
@@ -10,14 +11,20 @@ import answer_normalize
 from security import hash_password, verify_password
 # -----------------------------------------------------------------------------
 
+# --- Lobby integration (Darren) ---------------------------------------------
+from lobby import generate_room_code, make_room, public_room_view
+# -----------------------------------------------------------------------------
+
 
 
 trivia_data_server = BaseManager(('localhost', 5555), b'trivia')
 trivia_set_lock=Lock() # TODO: Get a seperate lock for every trivia set. It's excessive to lock the entire list.
 users_lock=Lock()
+rooms_lock=Lock()
 
 users={}
 trivia_sets=[]
+rooms={}  # room_code (4-digit PIN) -> room dict (see lobby.make_room)
 
 
 # trivia json specification:
@@ -151,6 +158,100 @@ def register_user(username, password, role="student"):
         return new_uuid
 
 
+# --- Game room lobbies (Darren) ---------------------------------------------
+
+def create_room(host_uuid, idx_of_trivia_set, pacing_mode="self"):
+    """
+    Teacher/host opens a lobby bound to an existing trivia set.
+    Returns a public room view dict, or an error string.
+    """
+    global rooms, trivia_sets, users
+    with trivia_set_lock:
+        if idx_of_trivia_set < 0 or idx_of_trivia_set >= len(trivia_sets):
+            return "trivia set not found"
+    with users_lock:
+        host = users.get(host_uuid)
+        if host is None:
+            return "host not found"
+        host_name = host.username
+        host_role = host.role
+    with rooms_lock:
+        code = generate_room_code(rooms.keys())
+        room = make_room(host_uuid, idx_of_trivia_set, pacing_mode)
+        room["players"][host_uuid] = {
+            "username": host_name,
+            "role": host_role,
+            "joined_at": time.time(),
+        }
+        rooms[code] = room
+        return public_room_view(code, room)
+
+
+def join_room(room_code, player_uuid):
+    """
+    Student (or any logged-in user) joins an existing lobby by PIN.
+    Returns a public room view dict, or an error string.
+    """
+    global rooms, users
+    code = str(room_code).strip()
+    with users_lock:
+        player = users.get(player_uuid)
+        if player is None:
+            return "player not found"
+        player_name = player.username
+        player_role = player.role
+    with rooms_lock:
+        room = rooms.get(code)
+        if room is None:
+            return "room not found"
+        if room["status"] == "ended":
+            return "room has ended"
+        room["players"][player_uuid] = {
+            "username": player_name,
+            "role": player_role,
+            "joined_at": time.time(),
+        }
+        return public_room_view(code, room)
+
+
+def get_room(room_code):
+    global rooms
+    code = str(room_code).strip()
+    with rooms_lock:
+        room = rooms.get(code)
+        if room is None:
+            return None
+        return public_room_view(code, room)
+
+
+def start_room(room_code, host_uuid):
+    """Only the host may flip waiting -> active."""
+    global rooms
+    code = str(room_code).strip()
+    with rooms_lock:
+        room = rooms.get(code)
+        if room is None:
+            return "room not found"
+        if room["host_uuid"] != host_uuid:
+            return "only the host can start the room"
+        room["status"] = "active"
+        room["question_idx"] = 0
+        return public_room_view(code, room)
+
+
+def leave_room(room_code, player_uuid):
+    global rooms
+    code = str(room_code).strip()
+    with rooms_lock:
+        room = rooms.get(code)
+        if room is None:
+            return "room not found"
+        room["players"].pop(player_uuid, None)
+        # If the host leaves, end the session so stragglers don't hang.
+        if player_uuid == room["host_uuid"]:
+            room["status"] = "ended"
+        return public_room_view(code, room)
+
 
 @atexit.register
 def goodbye(): #TODO: save trivia sets and users.
@@ -164,6 +265,11 @@ trivia_data_server.register('register_user', register_user)
 trivia_data_server.register('get_user', get_user)
 trivia_data_server.register('get_user_by_credentials', get_user_by_credentials)
 trivia_data_server.register('get_analytics', get_analytics)
+trivia_data_server.register('create_room', create_room)
+trivia_data_server.register('join_room', join_room)
+trivia_data_server.register('get_room', get_room)
+trivia_data_server.register('start_room', start_room)
+trivia_data_server.register('leave_room', leave_room)
 
 server= trivia_data_server.get_server()
 server.serve_forever()

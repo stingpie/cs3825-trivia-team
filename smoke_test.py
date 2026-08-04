@@ -136,6 +136,27 @@ def main():
     ok &= check("reach end of quiz gracefully (200, done=true)",
                 status == 200 and body.get("done") is True)
 
+    # --- Lobby flow (Darren): teacher hosts a room, student joins by PIN ---
+    status, body = teacher("POST", "/api/rooms", {
+        "idx_of_trivia_set": 0, "pacing_mode": "self"
+    })
+    room_ok = status == 201 and isinstance(body, dict) and "room_code" in body
+    ok &= check("create room (201, has room_code)", room_ok)
+    room_code = body.get("room_code") if room_ok else None
+
+    if room_code:
+        status, body = student("POST", "/api/rooms/join", {"room_code": room_code})
+        ok &= check("student join room (200)",
+                    status == 200 and body.get("room_code") == room_code)
+
+        status, body = teacher("GET", f"/api/rooms/{room_code}")
+        ok &= check("get room roster includes 2+ players",
+                    status == 200 and body.get("player_count", 0) >= 2)
+
+        status, body = teacher("POST", f"/api/rooms/{room_code}/start")
+        ok &= check("start room (200, status=active)",
+                    status == 200 and body.get("status") == "active")
+
     print()
     print("ALL PASSED" if ok else "SOME CHECKS FAILED -- see [FAIL] lines above")
     sys.exit(0 if ok else 1)
