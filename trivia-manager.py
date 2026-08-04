@@ -239,6 +239,28 @@ def start_room(room_code, host_uuid):
         return public_room_view(code, room)
 
 
+def advance_room_question(room_code, host_uuid):
+    """
+    Host-only: advances the room's shared question_idx by one. In
+    host-paced mode this is the single source of truth every player reads
+    from (see get_trivia() in server.py), so this is what actually makes
+    "Next Question" show the next question to everyone in the room at
+    once, instead of just the host's own session.
+    """
+    global rooms
+    code = str(room_code).strip()
+    with rooms_lock:
+        room = rooms.get(code)
+        if room is None:
+            return "room not found"
+        if room["host_uuid"] != host_uuid:
+            return "only the host can advance the room"
+        if room["status"] != "active":
+            return "room is not active"
+        room["question_idx"] += 1
+        return public_room_view(code, room)
+
+
 def leave_room(room_code, player_uuid):
     global rooms
     code = str(room_code).strip()
@@ -269,6 +291,7 @@ trivia_data_server.register('create_room', create_room)
 trivia_data_server.register('join_room', join_room)
 trivia_data_server.register('get_room', get_room)
 trivia_data_server.register('start_room', start_room)
+trivia_data_server.register('advance_room_question', advance_room_question)
 trivia_data_server.register('leave_room', leave_room)
 
 server= trivia_data_server.get_server()
