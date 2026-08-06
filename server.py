@@ -119,6 +119,19 @@ def _effective_trivia_position():
 @app.route("/api/trivia", methods=["GET"])
 @require_login  # was a manual 'UUID' in session check -- now handled by the decorator
 def get_trivia():
+    # Bug fix: a student who joined a room before the host pressed "Start
+    # Session" could already fetch and answer question 0, because nothing
+    # here checked the room's status. Block that for any session bound to
+    # a room (self-paced or host-paced) until the room is actually active.
+    if session.get('room_code'):
+        room = _room_state_for_session()
+        if room and room['status'] != 'active':
+            return jsonify({
+                "error": "room has not been started yet",
+                "waiting": True,
+                "status": room['status'],
+            }), 409
+
     idx_of_trivia_set, question_idx = _effective_trivia_position()
 
     if idx_of_trivia_set is not None and question_idx is not None:

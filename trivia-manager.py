@@ -120,6 +120,13 @@ class TriviaSet():
     def get_question(self, index):
         ret = self.trivia[index].copy()
         ret.pop('correct answers', None)  # prevent the client from scraping the answer key
+        # J-fix: the client had no way to render an accurate "Question X of Y"
+        # badge for live (non-fallback) sessions -- it only had the question
+        # text/type/choices. Include the position so script.js's loadMultiplayerQuestion()
+        # can update #question-progress-badge on every question, not just the
+        # local-fallback path.
+        ret['question_idx'] = index
+        ret['num_questions'] = self.num_questions
         return ret
 
 
