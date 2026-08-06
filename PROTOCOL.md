@@ -17,16 +17,29 @@ multiprocessing manager channel on port 5555.
 | Transport | TCP / HTTP 1.1 |
 | Encoding | UTF-8 JSON request/response bodies |
 | Session identity | Flask signed cookie session (`UUID`, `role`, trivia progress) |
-| Integrity (writes) | HMAC-SHA256 hex digest in `X-Signature` header |
+| Integrity (writes) | HMAC-SHA256 hex digest in `X-Signature` header, keyed by a per-session signing token |
 | Heartbeat interval | Client sends PING every 5 seconds |
 | Heartbeat timeout | Server marks client disconnected after 15 seconds (3 missed beats) |
 
 All mutating or answer-sensitive requests must include:
 
 ```
-X-Signature: <hmac_sha256_hex(raw_request_body, TRIVIA_HMAC_SECRET)>
+X-Signature: <hmac_sha256_hex(raw_request_body, this_session's_signing_token)>
 Content-Type: application/json
 ```
+
+The signing token is **not** a static secret shared by every client. It is
+generated fresh, at random, per session, by `issue_login_session()` in
+`security.py`, and returned in the response body of a successful
+REGISTER_USER or LOGIN call (see 2.1 and 2.2 below). The client stores it
+in memory for that session only and uses it to sign every write-sensitive
+request from then on. This replaced an earlier design where one static
+secret was embedded directly in `Static/script.js` and shared by every
+browser -- readable by anyone who opened dev tools, and identical for
+every user the app has ever had. A leaked per-session token only affects
+the one session it was issued to; `smoke_test.py` includes a check that
+specifically proves a request signed with a *different* session's token
+is rejected, not just that "some" signature is accepted.
 
 ---
 
@@ -53,10 +66,17 @@ requirements.
 `role` is optional and defaults to `"student"`. Allowed values:
 `"student"` | `"teacher"`.
 
-**Success response:** HTTP `201` — `"new user created!"`  
-Session cookie is issued with `UUID` and `role`.
+**Success response:** HTTP `201`
+```json
+{ "message": "new user created!", "signing_token": "<random per-session token>" }
+```
+Session cookie is issued with `UUID` and `role`. `signing_token` is a
+fresh, random value generated for this session -- store it and use it to
+sign every write-sensitive request from here on (see Section 1). It is
+**not** a fixed secret; a different login gets a different token, even
+for the same account.
 
-**Error response:** HTTP `409` — `"username already taken"`
+**Error response:** HTTP `400` — missing `username` or `password`, or HTTP `409` — `"username already taken"`
 
 ---
 
@@ -76,9 +96,12 @@ Session cookie is issued with `UUID` and `role`.
 
 **Success response:**
 ```json
-{ "role": "teacher" }
+{ "role": "teacher", "signing_token": "<random per-session token>" }
 ```
-HTTP `200`. Session cookie issued.
+HTTP `200`. Session cookie issued, and a fresh `signing_token` for this
+session -- the previous session's token (if any) is no longer valid once a
+new one is issued, since `require_valid_signature` always checks against
+whatever the current session's `signing_token` is.
 
 **Error response:**
 ```json
@@ -139,8 +162,17 @@ without revealing the answer key.
 
 **Purpose:** Grade a student's answer for the current question.
 
-**Endpoint:** `GET /api/trivia/verify`  
+**Endpoint:** `GET or POST /api/trivia/verify`  
 **Auth:** logged-in session + valid `X-Signature`
+
+Both methods are accepted: `GET` per the original protocol design (used by
+non-browser clients, e.g. the test scripts in this repo), and `POST` because
+browsers cannot attach a body to a `GET`/`HEAD` request at all — the real
+front-end client (`Static/script.js`) always sends `POST`. This route used
+to declare `GET` only, which meant the actual browser client's request was
+silently rejected with `405` and fell back to grading the answer locally;
+see the Deliverable 2 report, Section 3 ("Known Protocol Deviation") and
+Section 7 ("Integration Testing"), for how this was found and fixed.
 
 **Required fields:**
 ```json
@@ -182,8 +214,12 @@ or when the quiz ends:
 
 **Purpose:** Teacher views per-question correctness stats for a set.
 
-**Endpoint:** `GET /api/trivia/analytics`  
+**Endpoint:** `GET or POST /api/trivia/analytics`  
 **Auth:** logged-in `teacher` role
+
+Both methods are accepted for the same reason as SUBMIT_ANSWER above:
+`Static/script.js`'s `exportStudentGrades()` sends `POST` since a browser
+can't attach a body to `GET`.
 
 **Required fields:**
 ```json

@@ -1,0 +1,5 @@
+If you are trying to run the app on Render: no shared secret to set anymore.
+Signing switched from one static TRIVIA_HMAC_SECRET shared by every browser
+to a fresh, random token issued per-session at login/register (see
+security.py). Just deploy it -- each login gets its own signing token
+automatically.
