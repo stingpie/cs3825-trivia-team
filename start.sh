@@ -24,4 +24,14 @@ fi
 # Start the web server in the foreground, bound to Render's assigned port.
 # --host 0.0.0.0 is required: Render's health checks come from outside the
 # container, so binding to 127.0.0.1 (the default) would be unreachable.
-exec python3 -m flask --app server run --host 0.0.0.0 --port "$PORT"
+# --with-threads is required once more than one browser is actually
+# connected: this app's frontend polls several endpoints (heartbeat every
+# 5s, room standings every 3s, waiting-room status every 2s) from EVERY
+# connected client. Flask's dev server handles one request at a time
+# without this flag, so with 2-3+ browsers polling concurrently, requests
+# queue up behind each other -- most visibly, a host's heartbeat PING can
+# sit in the queue long enough to miss reliability.py's 15s connectivity
+# window, showing the host as "Offline" even though their tab is open and
+# fine. Threading fixes that by letting the dev server handle requests
+# concurrently instead of serially.
+exec python3 -m flask --app server run --host 0.0.0.0 --port "$PORT" --with-threads

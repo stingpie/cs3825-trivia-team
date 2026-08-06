@@ -13,7 +13,7 @@ from security import (
     require_valid_signature,
     issue_login_session,
 )
-from reliability import record_heartbeat, save_reconnect_state, load_reconnect_state, is_connected
+from reliability import record_heartbeat, save_reconnect_state, load_reconnect_state, clear_reconnect_state, is_connected
 # -----------------------------------------------------------------------------
 
 app= Flask(__name__)
@@ -261,6 +261,23 @@ def reconnect():
     state = load_reconnect_state(session['UUID'])
     if state is None:
         return jsonify({"error": "no saved progress for this session"}), 404
+
+    # Bug fix: this used to trust saved state unconditionally, with no
+    # expiry and nothing ever calling clear_reconnect_state(). A player
+    # from an earlier test session would silently get pulled back into
+    # that OLD (possibly long-ended) room on their next page load instead
+    # of landing on the normal join screen -- invisible to the host, who
+    # never sees them in the new room's player list at all. Validate the
+    # room still exists and hasn't ended before trusting it; otherwise
+    # drop the stale state and behave as if there was nothing to resume.
+    room_code = state.get('room_code')
+    if room_code:
+        room = _unwrap(trivia_data_server.get_room(room_code))
+        if room is None or room.get('status') == 'ended':
+            clear_reconnect_state(session['UUID'])
+            session.pop('room_code', None)
+            return jsonify({"error": "no saved progress for this session"}), 404
+
     session['idx_of_trivia_set'] = state['idx_of_trivia_set']
     session['question_idx'] = state['question_idx']
     if state.get('room_code'):
@@ -417,6 +434,9 @@ def leave_room():
     if isinstance(result, str):
         return _lobby_error(result)
     session.pop('room_code', None)
+    # Bug fix companion: don't leave stale reconnect state pointing at a
+    # room this player just deliberately left.
+    clear_reconnect_state(session['UUID'])
     return jsonify(result), 200
 
 
