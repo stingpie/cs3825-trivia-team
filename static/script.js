@@ -554,6 +554,94 @@
      * responses", "correct answers"} shape the backend expects, and
      * POSTs the whole array via apiPostQuiz().
      */
+    /**
+     * Converts a saved-quiz payload (the shape sent to POST /api/trivia:
+     * {type, question, "possible responses", "correct answers"}) into the
+     * shape quizDatabase entries use ({q, type, answers, choices}), so a
+     * quiz built and saved via the builder can also be opened, played
+     * solo, and hosted through the same code paths as the three built-in
+     * demo quizzes - all of which read from quizDatabase, not from the
+     * backend payload format directly.
+     */
+    function backendPayloadTypeToLocalType(backendType) {
+      if (backendType === 'multiple select') return 'Multiple Select';
+      if (backendType === 'multiple choice') return 'Multiple Choice';
+      return 'Short Answer';
+    }
+
+    function convertBackendPayloadToLocalQuiz(quizPayload, tag) {
+      return {
+        tag,
+        questions: quizPayload.map(q => ({
+          q: q.question,
+          type: backendPayloadTypeToLocalType(q.type),
+          answers: q['correct answers'] || [],
+          choices: q['possible responses'] || [],
+        })),
+      };
+    }
+
+    /**
+     * The reverse conversion: turns a quizDatabase entry back into the
+     * backend's payload shape. Used so the three built-in demo quizzes
+     * (which only ever existed in quizDatabase, never POSTed to the
+     * server) can be published on-demand the first time someone tries to
+     * host them live - see launchHostLobby().
+     */
+    function localTypeToBackendPayloadType(localType) {
+      if (localType === 'Multiple Select') return 'multiple select';
+      if (localType === 'Multiple Choice' || localType === 'True / False') return 'multiple choice';
+      return 'short answer';
+    }
+
+    function convertLocalQuizToBackendPayload(quiz) {
+      return quiz.questions.map(q => ({
+        type: localTypeToBackendPayloadType(q.type),
+        question: q.q,
+        'possible responses': q.choices || [],
+        'correct answers': q.answers || [],
+      }));
+    }
+
+    /**
+     * Builds and appends a new .quiz-card to the Explore grid, matching
+     * the markup/handlers of the three hardcoded cards exactly (same
+     * openFullQuizPage/startSoloPlay/openHostSetup wiring), so a quiz
+     * saved through the builder actually becomes visible and clickable
+     * instead of only existing in quizBackendIndex with no way to reach
+     * it from the UI.
+     */
+    function addQuizCardToExplore(title, tag, quiz) {
+      const grid = document.getElementById('quiz-grid-container');
+      if (!grid) return;
+
+      // If a card for this exact title already exists (re-saving the same
+      // quiz name), replace it instead of adding a duplicate.
+      const existing = Array.from(grid.querySelectorAll('.quiz-card')).find(
+        card => card.querySelector('h3')?.innerText === title
+      );
+      if (existing) existing.remove();
+
+      const typeLabels = [...new Set(quiz.questions.map(q => q.type))];
+      const summary = `${quiz.questions.length} Question${quiz.questions.length === 1 ? '' : 's'} • ${typeLabels.join(' & ')}`;
+
+      const card = document.createElement('div');
+      card.className = 'quiz-card';
+      card.setAttribute('onclick', `openFullQuizPage(${JSON.stringify(title)})`);
+      card.innerHTML = `
+        <div>
+          <div class="quiz-tag">${tag}</div>
+          <h3>${title}</h3>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0.5rem 0;">${summary}</p>
+        </div>
+        <div style="display: flex; gap: 0.5rem; margin-top: 1rem;" onclick="event.stopPropagation();">
+          <button class="btn-secondary" style="flex: 1; padding: 0.5rem;" onclick="startSoloPlay(${JSON.stringify(title)})">Solo</button>
+          <button class="btn-neon" style="flex: 1; padding: 0.5rem;" onclick="openHostSetup(${JSON.stringify(title)})">Host 📺</button>
+        </div>
+      `;
+      grid.appendChild(card);
+    }
+
     async function handleSaveBuilderQuiz() {
       const title = document.getElementById('builder-quiz-title').value || "New Custom Quiz";
       const cards = document.querySelectorAll('.builder-question-card');
@@ -610,6 +698,16 @@
         // "Host" for this quiz can open a real /api/rooms lobby against it.
         quizBackendIndex[title] = parseInt(backendIdx, 10);
       }
+
+      // Make the saved quiz actually usable from the UI: without this, a
+      // save only updated quizBackendIndex, which nothing on the Explore
+      // page or openHostSetup() reads from - the quiz was saved, but
+      // invisible and unplayable (openHostSetup silently substituted
+      // "Networking Protocols" whenever quizDatabase[title] was missing).
+      const localQuiz = convertBackendPayloadToLocalQuiz(quizPayload, 'Custom Quiz');
+      quizDatabase[title] = localQuiz;
+      addQuizCardToExplore(title, 'Custom Quiz', localQuiz);
+
       closeModal('add-quiz-modal');
     }
 
@@ -1123,9 +1221,25 @@
       const timerDisplay = document.getElementById('host-timer-display');
       const startBtn = document.getElementById('host-start-session-btn');
 
-      const idxOfTriviaSet = quizBackendIndex[activeQuizTitle];
+      let idxOfTriviaSet = quizBackendIndex[activeQuizTitle];
       let joinedLive = false;
       const liveStatusEl = document.getElementById('host-pin-live-status');
+
+      // Auto-publish on first Host click: previously, only quizzes saved
+      // through "Build New Quiz" ever got an entry in quizBackendIndex, so
+      // the three featured demo quizzes (Networking Protocols, World
+      // History Essentials, Web Security & Cryptography) could never go
+      // live - they only ever existed in quizDatabase, never POSTed to
+      // the server. If we have local question data for this quiz but no
+      // backend index yet, publish it now, the same way the builder does.
+      if (idxOfTriviaSet === undefined && quizDatabase[activeQuizTitle]) {
+        const payload = convertLocalQuizToBackendPayload(quizDatabase[activeQuizTitle]);
+        const backendIdx = await apiPostQuiz(payload);
+        if (backendIdx !== null) {
+          idxOfTriviaSet = parseInt(backendIdx, 10);
+          quizBackendIndex[activeQuizTitle] = idxOfTriviaSet;
+        }
+      }
 
       if (idxOfTriviaSet !== undefined) {
         try {
@@ -1152,7 +1266,7 @@
           console.log("Running room locally - backend unreachable");
         }
       } else {
-        showCustomToast(`ℹ️ "${activeQuizTitle}" hasn't been saved to the server yet, so this will be a local-only demo room. Use "Build New Quiz" to save it first for a real live session.`);
+        showCustomToast(`ℹ️ Couldn't publish "${activeQuizTitle}" to the server, so this will be a local-only demo room.`);
       }
 
       if (!joinedLive) {
