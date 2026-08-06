@@ -2,6 +2,7 @@ from multiprocessing import Lock
 from multiprocessing.managers import BaseManager
 import atexit
 import pickle
+import os
 import time
 import uuid
 import answer_normalize
@@ -25,6 +26,56 @@ rooms_lock=Lock()
 users={}
 trivia_sets=[]
 rooms={}  # room_code (4-digit PIN) -> room dict (see lobby.make_room)
+
+
+# --- Persistence (accounts + quizzes survive a process restart) ------------
+# users and trivia_sets previously lived ONLY in memory -- every restart
+# (crash, manual restart, or a Render redeploy) silently wiped every
+# registered account and every saved quiz, with no error to explain why.
+# This pickles both to a local file after every mutation, and reloads them
+# on startup. Rooms are intentionally NOT persisted: a live lobby's value
+# ends when the process restarts anyway (every connected client would need
+# to reconnect and re-join from scratch), so keeping that in memory only
+# avoids resurrecting stale, half-broken room state.
+#
+# Caveat: this is a local file, not a database. It survives restarts and
+# crashes on the same machine/container. It does NOT survive a fresh
+# Render deploy, since Render gives each deploy a new, empty disk unless
+# you've attached a persistent disk volume. For anything that needs to
+# survive redeploys, this file needs to be swapped for real external
+# storage (e.g. a small hosted Postgres/SQLite-on-a-volume) later.
+DATA_FILE = os.environ.get("TRIVIA_DATA_FILE", "trivia_data.pkl")
+
+
+def _save_state():
+    try:
+        with trivia_set_lock, users_lock:
+            snapshot = {"users": users, "trivia_sets": trivia_sets}
+        tmp_path = DATA_FILE + ".tmp"
+        with open(tmp_path, "wb") as f:
+            pickle.dump(snapshot, f)
+        os.replace(tmp_path, DATA_FILE)  # atomic on POSIX -- avoids a half-written file if the process dies mid-save
+    except Exception as exc:
+        print(f"[trivia-manager.py] WARNING: failed to save state: {exc!r}")
+
+
+def _load_state():
+    global users, trivia_sets
+    if not os.path.exists(DATA_FILE):
+        return
+    try:
+        with open(DATA_FILE, "rb") as f:
+            snapshot = pickle.load(f)
+        users = snapshot.get("users", {})
+        trivia_sets = snapshot.get("trivia_sets", [])
+        print(f"[trivia-manager.py] Restored {len(users)} user(s) and "
+              f"{len(trivia_sets)} trivia set(s) from {DATA_FILE}.")
+    except Exception as exc:
+        print(f"[trivia-manager.py] WARNING: failed to load {DATA_FILE} "
+              f"({exc!r}); starting with empty state.")
+
+
+# -----------------------------------------------------------------------------
 
 
 # trivia json specification:
@@ -140,7 +191,9 @@ def new_trivia_set(trivia_json):
     global trivia_sets
     with trivia_set_lock:
         trivia_sets+=[TriviaSet(trivia_json)]
-        return len(trivia_sets)-1
+        idx = len(trivia_sets)-1
+    _save_state()
+    return idx
 
 def register_user(username, password, role="student"):
     """
@@ -155,7 +208,8 @@ def register_user(username, password, role="student"):
         new_uuid = uuid.uuid4().hex
         password_hash = hash_password(password)
         users[new_uuid]=User(username, password_hash, new_uuid, role)
-        return new_uuid
+    _save_state()
+    return new_uuid
 
 
 # --- Game room lobbies (Darren) ---------------------------------------------
@@ -276,9 +330,14 @@ def leave_room(room_code, player_uuid):
 
 
 @atexit.register
-def goodbye(): #TODO: save trivia sets and users.
-    pass
+def goodbye():
+    _save_state()
 
+
+# Load any previously saved users/trivia sets now that User and TriviaSet
+# are defined -- must happen after both classes exist, or pickle can't
+# reconstruct saved instances of them.
+_load_state()
 
 trivia_data_server.register('get_trivia', get_trivia)
 trivia_data_server.register('verify_answer', verify_answer)
