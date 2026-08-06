@@ -1,0 +1,116 @@
+Louise's Contribution — Technical Design and Reflection Report
+COMP 3825 — Deliverable 2 (Design Review, Prototype, and Technical Reflection)
+Frontend implementation, protocol extensions, and reliability features
+
+Note to team: this covers the sections of our shared report that are my contribution — the client (frontend) side of Architecture, Protocol, Security, and Reliability, plus Testing/Challenges/Lessons Learned from my own work. Sections or parts of sections marked "(shared)" need to be merged with the corresponding backend-side writeup. Section numbers below match the assignment's required report structure so this can be merged directly.
+
+
+2. Final System Architecture (client-side contribution)
+
+The client is a single-page application (SPA) written in vanilla JavaScript, with no framework. It is served by our Flask backend (server.py) as a single HTML document (templates/index.html) plus one JavaScript file (static/script.js), loaded with a standard <script> tag. Every "screen" a user sees — Home, Join Room, Solo Practice, Host Setup, Live Host Scoreboard, Dashboard, Login, and Sign-Up — exists in the page at all times as a hidden <div>, and a single switchView() function toggles which one is visible. There is no client-side routing and no full page reloads after the initial load; all navigation and state changes happen through direct DOM manipulation driven by plain JavaScript variables at the top of the file.
+
+Every network-dependent feature follows the same communication pattern: the client first attempts a fetch() call to the corresponding Flask endpoint, and only falls back to bundled local demo data if that call fails outright (network error) or is unreachable. This was a deliberate architectural choice rather than an oversight — it means the frontend can still be developed, demoed, and partially tested even when the backend or the internal trivia-manager.py process is not running, and it means a live demo degrades gracefully instead of breaking outright if a request momentarily fails.
+
+In the overall system diagram, the browser is a client node that may run on a physically separate host from the server. The Flask process (server.py) and the internal data-manager process (trivia-manager.py) communicate with each other over a local multiprocessing channel on port 5555 and are expected to run on the same machine as each other; only the Flask process needs to be reachable from the browser's host. This distinction mattered directly for the Multi-Host Communication requirement: server.py needed to be started so it listens on all network interfaces (0.0.0.0) rather than Flask's default of localhost-only, or no second host could ever reach it regardless of how the rest of the system was configured.
+
+
+3. Protocol Design (client-side implementation, plus new messages)
+
+The frontend is the concrete implementation of the client side of our custom JSON protocol (documented in full in PROTOCOL.md and protocol_spec.json). Each protocol message maps to one clearly identifiable function in static/script.js: for example, JOIN_ROOM is implemented in handleJoinGame(), which POSTs a room_code field and stores the returned pacing_mode so the rest of the client behaves correctly for that room; HEARTBEAT is implemented as a five-second interval loop (startHeartbeat()/sendHeartbeat()) that begins the moment a player joins a multiplayer session and stops the moment they leave it; RECONNECT is implemented in attemptReconnect(), called once when the page loads, which silently asks the backend whether the current session has any saved mid-game progress to resume.
+
+Two new protocol messages were added after Deliverable 1, to support a reliability gap and a game-mode gap that surfaced once we had a working prototype to actually test against. Both are documented below in the same format as the rest of PROTOCOL.md, and both are implemented end-to-end in static/script.js.
+
+ADVANCE_ROOM
+  Purpose: Lets a host in a Host-Paced session advance the whole room to the next question at once. Before this message existed, the "Next Question" control in Host-Paced mode only advanced the host's own personal progress and had no effect on any other player — this message and its handling closes that gap.
+  Method / Path: POST /api/rooms/<room_code>/next
+  Required fields: None in the body; room_code is part of the URL path, and the caller's identity (must be this room's host) comes from their existing login session.
+  Expected response: 200 OK with the updated room object, including the incremented question_idx and the room's status.
+  Error conditions: 403 if the caller is not this room's host; 409 if the room has not been started yet; 404 if the room code does not exist.
+
+On the client, dispatchNextHostQuestion() calls this endpoint when the host clicks "Next Question." Because there is no push/WebSocket mechanism in this stack, every player in a Host-Paced room polls for the change instead of being pushed it directly: startStudentQuestionPolling() checks every two seconds whether the question being served has changed, and updates the display the moment it detects a change. This two-second interval was a deliberate tradeoff between responsiveness and request volume, discussed further in the Challenges section below.
+
+CHECK_CONNECTIVITY
+  Purpose: Reports, per player in a room, whether they have sent a heartbeat within the timeout window, so the host can see at a glance who is still actively connected — this is the concrete implementation of our Timeout Detection reliability feature.
+  Method / Path: GET /api/rooms/<room_code>/connectivity
+  Required fields: None; room_code is part of the URL path.
+  Expected response: 200 OK with a list of players in the room, each annotated with a boolean connected field.
+  Error conditions: 404 if the room code does not exist.
+
+On the client, pollRoomStandings() calls this endpoint alongside the existing room-roster endpoint every three seconds while the host scoreboard is open, and renders a green or red status indicator next to each player's name in the live standings table.
+
+Known protocol deviation (shared with backend): SUBMIT_ANSWER and GET_ANALYTICS are documented as GET requests, but browsers cannot send a request body on a GET request at all — this is a browser platform restriction, not a bug in either the frontend or backend. The client therefore sends both as POST instead, which currently does not match server.py's declared route method for either endpoint. This is flagged directly in protocol_spec.json as a note on both message definitions and is an open item for whoever owns server.py to resolve.
+
+
+4. Security Design (client-side contribution)
+
+Two of the backend's write-sensitive endpoints (creating a quiz, verifying an answer) require every request to carry an X-Signature header — an HMAC-SHA256 digest of the exact raw request body, computed with a secret shared between client and server. On the client, this is implemented in signRequestBody() using the browser's built-in Web Crypto API (crypto.subtle), and the shared secret is stored as a constant near the top of static/script.js that must be kept identical to the TRIVIA_HMAC_SECRET environment variable the backend processes are started with.
+
+This mechanism protects the integrity of write requests — the server can detect if a request body was altered in transit or forged without knowledge of the secret — which satisfies the assignment's Integrity requirement. It is worth being explicit about its limitation, though: because the signing secret has to live in client-side JavaScript to be usable at all, it is visible to anyone who opens the browser's developer tools and views the page source. This means the mechanism meaningfully protects against accidental corruption or a naive tampering attempt, but it is not a defense against a motivated attacker who has already inspected the client code, since they would have the same secret. Recognizing that limitation, rather than treating client-side HMAC as equivalent to a true shared-secret system between two trusted server processes, was itself one of the more useful things I took away from implementing this piece.
+
+
+5. Reliability and Fault Handling (my contribution)
+
+Three reliability features were implemented and wired end-to-end between the client and server as part of my work on this project.
+
+Heartbeat (PING/PONG)
+  Problem addressed: Detecting whether a player's client is still actively connected during a live session, rather than only finding out when they try (and fail) to submit an answer.
+  How it works: The moment a player successfully joins a multiplayer game, startHeartbeat() begins sending a PING to POST /api/heartbeat every five seconds and continues until the game ends or the player navigates away. The server records the timestamp of the most recent PING per player.
+  Tested: Yes — confirmed via the browser's network activity that PINGs are sent on the expected interval, and confirmed server-side that a player's recorded last-seen timestamp updates accordingly.
+
+Reconnection Logic
+  Problem addressed: A player whose browser tab reloads, or whose Wi-Fi drops and reconnects, partway through a quiz should be able to resume where they left off instead of losing their progress or having to rejoin from scratch.
+  How it works: The backend already saved enough state (trivia set index, question index, room code) to resume a session, through an endpoint that existed but was never called by the frontend before this work. attemptReconnect() now calls that endpoint once when the page loads; if there is saved progress for the current login session, the player is silently restored directly into the gameplay view without any action on their part. If there is nothing to resume — the normal case for most page loads — nothing visibly happens.
+  Tested: Yes, against a real running backend — confirmed that a session with saved progress is correctly returned and that the room code and question index it reports match what was actually saved.
+
+Timeout Detection
+  Problem addressed: The host having no way to distinguish a player who is still actively playing from one who has silently disconnected, short of a full disconnect/reconnect cycle.
+  How it works: This is the CHECK_CONNECTIVITY message described in Section 3 above. A player is considered connected if a heartbeat has been received from them within the timeout window; the host scoreboard polls this and shows a live green or red indicator per player.
+  Tested: Yes — confirmed that a newly joined player who has not yet sent a heartbeat correctly shows as disconnected, and that they flip to connected within one polling interval of their first heartbeat.
+
+On test reproducibility (shared note): the reliability features above were verified during development using temporary scripts that made real HTTP requests against a running instance of the backend, not simulated or invented results. Those scripts were not included in the final team submission, by team decision, in favor of a teammate building equivalent coverage. Before this report is finalized, I still need to do (or confirm someone has done) a final pass of manually clicking through each of these three features directly in the browser, so the "Tested" claims above are backed by something visible in a demo, not only by development-time scripting.
+
+
+6. Major Challenges Encountered
+
+Inheriting and understanding AI-generated code
+My starting point for the frontend was not code I wrote from scratch — I described the design and features I wanted to an AI tool and iterated on the result, rather than authoring it line by line myself. This created a real challenge distinct from normal coding: before I could confidently extend or debug anything, I had to build an accurate mental model of code I had not written, including its state-management pattern, its naming conventions, and several non-obvious design decisions (like the fetch-then-local-fallback pattern described in Section 2). I addressed this by having a second AI tool systematically comment the entire file and explain each function's purpose before I allowed any further changes to be made, and by deliberately testing individual features myself rather than assuming generated code was correct. The lesson this reinforced is that "the code runs" and "I understand why the code works" are different bars, and only the second one is actually defensible in a technical report or a live Q&A.
+
+A stale-grading bug in host-paced mode
+When host-paced synchronization was first implemented, only the endpoint that serves the current question was updated to read from the room's shared, live question index; the endpoint that grades a submitted answer was not. This meant a player in a host-paced room could be looking at the correct current question on screen, but have their submitted answer graded against whichever question their session had originally joined on — silently wrong grading that would not have been obvious from casual use, since the displayed question was always correct. This was only caught by writing a test that specifically checked grading correctness after the host advanced the room, rather than only checking that the display updated. The fix consolidated both endpoints (and the endpoint that blocks self-advancement in host-paced mode) onto a single shared helper function, so all three now agree on what "the current question" means for a given session. The lesson here was concrete: testing that a value is displayed correctly is not the same as testing that the same value is used correctly everywhere it matters, and a bug like this can be completely invisible to manual testing that only checks what is on screen.
+
+A protocol requirement that could not be implemented as documented
+Our protocol documented the answer-verification and analytics messages as GET requests carrying a JSON body. This works from a Python test client (which is permitted to attach a body to a GET request), but browsers enforce a stricter rule and refuse to attach a body to a GET or HEAD request at all — the browser's fetch API throws an error before any network request is even sent. This was discovered directly through testing, not by re-reading the protocol spec, and it could not be resolved from the frontend alone, since the fix requires the backend route to also accept POST. I addressed it by sending POST from the client (the only method that can possibly work from a browser) and documenting the discrepancy directly in protocol_spec.json for whoever owns that backend route to resolve. The broader lesson was that a protocol design that looks reasonable on paper can run into constraints specific to one class of client (in this case, browsers specifically) that would not surface from the server side alone, which is part of why cross-testing between the actual client and the actual server, rather than testing each side against assumptions about the other, mattered so much once this feature was in place.
+
+Designing synchronization without a push mechanism
+Host-Paced mode requires every player to see the same question change at (approximately) the same moment, but this stack has no WebSocket connection or server-push mechanism of any kind — only request/response HTTP. The only way for a client to learn that the host has advanced the room is to ask. I resolved this with a client-side polling loop, checking every two seconds while a player is in a host-paced game. This is a genuine engineering tradeoff rather than a clean solution: a shorter interval would feel more responsive but generate proportionally more requests against the backend, and a longer interval would reduce load but make the game feel laggy. Two seconds was chosen as a reasonable middle ground given the scale of this project, but it is worth naming explicitly as a limitation rather than presenting it as if it were instantaneous.
+
+
+7. Testing and Evaluation (my contribution)
+
+The following describes testing I performed directly against a running instance of the application, covering the client-facing features described above.
+
+Functional testing
+  Procedure: Started trivia-manager.py and server.py, opened the application in a browser, and walked through account creation, login, browsing and searching quizzes, Solo Practice, creating a room in both Self-Paced and Host-Paced modes, joining as a second simulated player, and completing a full quiz to the results screen.
+  Expected result: Each step completes without error and the UI reflects the correct state at every point.
+  Actual result: Confirmed working for all flows listed.
+
+Invalid input testing
+  Procedure: Attempted to join a room with a non-existent room code, and attempted a request while not logged in.
+  Expected result: A clear error message is shown to the user and the application does not crash or enter a broken state.
+  Actual result: Confirmed — an invalid room code produces a clear "Invalid Room PIN" message, and an unauthenticated request is handled with an appropriate prompt rather than a silent failure.
+
+Failure / reliability scenario testing
+  Procedure: Verified the reconnect flow by fetching a question (which causes the backend to save progress) and then separately requesting that saved state back, simulating what happens on a page reload; verified the connectivity indicator flips from disconnected to connected after a heartbeat is sent.
+  Expected result: Saved progress is returned accurately; connectivity status reflects the most recent heartbeat.
+  Actual result: Confirmed for both, against a live running backend.
+
+I still want to capture screenshots of the live standings table (showing the green/red status indicators), a Host-Paced session mid-dispatch, and the browser's Network tab showing a signed request with the X-Signature header, to include as the demonstration evidence this deliverable asks for.
+
+
+8. Lessons Learned
+
+The clearest shift for me over this deliverable was going from being able to click through the application and confirm it "worked," to being able to explain, function by function, why it works the way it does — including being able to name its real limitations (the two-second polling delay, the client-side HMAC secret's visibility, the unresolved GET/POST protocol mismatch) rather than only its features. Starting from AI-generated code made this a more deliberate process than it might otherwise have been, since I could not rely on having written it myself to already understand it; I had to build that understanding on purpose, through comments, targeted testing, and tracing through what each function actually does.
+
+What worked well was treating every new feature (host-paced sync, reconnection, connectivity) as something to verify against the real running backend rather than something to assume was correct because the relevant code existed. The stale-grading bug in particular would very likely have gone unnoticed under looks-right-on-screen testing alone. What I would do differently is build that verification habit in from the start of a feature rather than after noticing something felt off — in this case, testing was what caught a real correctness bug, not general familiarity with the code.
+
+On the networking side, this project made the client/server split concrete in a way that is easy to state abstractly but only really becomes clear when something breaks because of it — for example, realizing that Flask's default host binding is a real Multi-Host Communication blocker, not just a configuration detail, or that a protocol documented from the server's point of view can be silently unimplementable from one specific kind of client. On the security side, implementing the client-side signing made the gap between "this request is signed" and "this request is trustworthy against a determined attacker" concrete rather than theoretical, since I had to reason about exactly who could see the secret being used to sign it.

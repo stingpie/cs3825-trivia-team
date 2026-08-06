@@ -1,7 +1,8 @@
-from flask import Flask, session, request, jsonify, Response
+from flask import Flask, session, request, jsonify, Response, render_template
 from multiprocessing.managers import BaseManager
 import secrets
 import time
+import os
 
 # --- Security & Reliability integration (Jordan) ---------------------------
 # security.py and reliability.py must sit next to this file (or be installed
@@ -12,11 +13,11 @@ from security import (
     require_valid_signature,
     issue_login_session,
 )
-from reliability import record_heartbeat, save_reconnect_state, load_reconnect_state
+from reliability import record_heartbeat, save_reconnect_state, load_reconnect_state, is_connected
 # -----------------------------------------------------------------------------
 
 app= Flask(__name__)
-app.secret_key = secrets.token_urlsafe(16)
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-stable-secret-key-cs3825')
 
 
 trivia_data_server=BaseManager(('localhost', 5555), b'trivia')
@@ -32,6 +33,7 @@ trivia_data_server.register('create_room')
 trivia_data_server.register('join_room')
 trivia_data_server.register('get_room')
 trivia_data_server.register('start_room')
+trivia_data_server.register('advance_room_question')
 trivia_data_server.register('leave_room')
 
 
@@ -72,29 +74,69 @@ def _unwrap(value):
     return value
 
 
-@app.route("/")
-def hello_world():
-    return "<p> hello, world</p>"
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+def _room_state_for_session():
+    """
+    If this session is bound to a room (session['room_code']), fetches
+    that room's current live state from trivia-manager.py. Returns None
+    if there's no room bound to this session, or the room can't be found.
+    """
+    room_code = session.get('room_code')
+    if not room_code:
+        return None
+    return _unwrap(trivia_data_server.get_room(room_code))
+
+
+def _effective_trivia_position():
+    """
+    Returns (idx_of_trivia_set, question_idx) for the current session.
+    For self-paced sessions (or no room at all) this is just the
+    session's own values, unchanged from how every route used them
+    before room-awareness existed. For host-paced sessions, it instead
+    reads the room's live shared question_idx (only ever advanced by the
+    host, via POST /api/rooms/<code>/next) - that's what makes every
+    player see, and get graded against, the same question at the same
+    time. `session['pacing_mode']` is cached at join/create time (see
+    _apply_room_to_session), so self-paced requests never pay for a room
+    lookup at all - only host-paced ones do, since that's the only case
+    where the session's own stored index can be stale.
+    """
+    idx_of_trivia_set = session.get('idx_of_trivia_set')
+    question_idx = session.get('question_idx')
+
+    if session.get('pacing_mode') == 'host':
+        room = _room_state_for_session()
+        if room:
+            idx_of_trivia_set = room['idx_of_trivia_set']
+            question_idx = room.get('question_idx', 0)
+
+    return idx_of_trivia_set, question_idx
+
 
 @app.route("/api/trivia", methods=["GET"])
 @require_login  # was a manual 'UUID' in session check -- now handled by the decorator
 def get_trivia():
-    if('idx_of_trivia_set' in session and 'question_idx' in session):
-        result = _unwrap(trivia_data_server.get_trivia(session['idx_of_trivia_set'], session['question_idx']))
+    idx_of_trivia_set, question_idx = _effective_trivia_position()
+
+    if idx_of_trivia_set is not None and question_idx is not None:
+        result = _unwrap(trivia_data_server.get_trivia(idx_of_trivia_set, question_idx))
         if(result):
             # Snapshot progress on every fetch so a dropped client can resume here.
             save_reconnect_state(
                 session['UUID'],
-                session['idx_of_trivia_set'],
-                session['question_idx'],
+                idx_of_trivia_set,
+                question_idx,
                 room_code=session.get('room_code'),
             )
             return jsonify(result)
         else:
             return "Error in getting the next question.", 500
-    if('idx_of_trivia_set' not in session):
+    if idx_of_trivia_set is None:
         return "No active trivia set selected.", 400
-    if('question_idx' not in session):
+    if question_idx is None:
         return "No question index found", 400
 
 @app.route("/api/trivia/verify", methods=["GET"])
@@ -102,18 +144,24 @@ def get_trivia():
 @require_valid_signature  # J2: rejects tampered SUBMIT_ANSWER-style payloads
 def verify_answer(): # should recieve {'answer':['something seomthing something']} returns {'correct':true|false}
     answer = request.get_json()['answer']
-    if('idx_of_trivia_set' in session and 'question_idx' in session):
+    idx_of_trivia_set, question_idx = _effective_trivia_position()
+    if idx_of_trivia_set is not None and question_idx is not None:
         response={}
-        response['correct']=_unwrap(trivia_data_server.verify_answer(session['UUID'], session['idx_of_trivia_set'], session['question_idx'], answer))
+        response['correct']=_unwrap(trivia_data_server.verify_answer(session['UUID'], idx_of_trivia_set, question_idx, answer))
         return jsonify(response)
-    if('idx_of_trivia_set' not in session):
+    if idx_of_trivia_set is None:
         return "No active trivia set selected.", 400
-    if('question_idx' not in session):
+    if question_idx is None:
         return "No question index found", 400
 
 @app.route("/api/trivia/next", methods=["GET"])
 @require_login
 def next_question():
+    if session.get('pacing_mode') == 'host':
+        # Host-paced players don't advance themselves -- only the host
+        # moves everyone forward, via POST /api/rooms/<code>/next.
+        return jsonify({"error": "host-paced session -- wait for the host to advance"}), 403
+
     if('idx_of_trivia_set' in session and 'question_idx' in session):
         session['question_idx']+=1
         result = get_trivia()
@@ -148,11 +196,12 @@ def create_user(): # should recieve {'username':"asldjad", "password":"alsdjoa",
     role = user_info.get('role', 'student')  # default to the lower-privilege role
     # NOTE: register_user (trivia-manager.py) is responsible for calling
     # security.hash_password() before storing this -- never store plaintext.
-    result = str(trivia_data_server.register_user(username, password, role))
+    raw_result = trivia_data_server.register_user(username, password, role)
+    result = str(_unwrap(raw_result))
     if result=="username already taken":
-        return Response(str(result), 409)
+        return Response(result, status=409)
     issue_login_session(result, role)  # sets session['UUID'], session['role'], etc.
-    return Response('new user created!', 201)
+    return Response('new user created!', status=201)
 
 @app.route("/api/login", methods=["POST"])
 def login():  # should receive {'username':..., 'password':...}
@@ -216,7 +265,9 @@ def _lobby_error(result):
         "player not found": 404,
         "room not found": 404,
         "room has ended": 409,
+        "room is not active": 409,
         "only the host can start the room": 403,
+        "only the host can advance the room": 403,
     }
     status = mapping.get(result, 400)
     return jsonify({"error": result}), status
@@ -227,6 +278,11 @@ def _apply_room_to_session(room_view):
     session['room_code'] = room_view['room_code']
     session['idx_of_trivia_set'] = room_view['idx_of_trivia_set']
     session['question_idx'] = room_view.get('question_idx', 0)
+    # pacing_mode doesn't change for the lifetime of a room, so it's cached
+    # here rather than re-fetched from trivia-manager.py on every request -
+    # see get_trivia() / next_question(), which only do a live room lookup
+    # when this says 'host'.
+    session['pacing_mode'] = room_view.get('pacing_mode', 'self')
     save_reconnect_state(
         session['UUID'],
         session['idx_of_trivia_set'],
@@ -284,6 +340,31 @@ def get_room(room_code):
     return jsonify(result), 200
 
 
+@app.route("/api/rooms/<room_code>/connectivity", methods=["GET"])
+@require_login
+def get_room_connectivity(room_code):
+    """
+    CHECK_CONNECTIVITY -- timeout-detection reliability feature. Uses
+    reliability.py's heartbeat records (already populated by
+    POST /api/heartbeat, see heartbeat() below) to report which players in
+    a room have PING'd within the last HEARTBEAT_TIMEOUT_SECONDS and which
+    haven't, without waiting for a full disconnect/reconnect cycle.
+    Response: {"players": [{"UUID": ..., "username": ..., "connected": true|false}]}
+    """
+    result = _unwrap(trivia_data_server.get_room(room_code))
+    if result is None:
+        return jsonify({"error": "room not found"}), 404
+    players = [
+        {
+            "UUID": p["UUID"],
+            "username": p["username"],
+            "connected": is_connected(p["UUID"]),
+        }
+        for p in result.get("players", [])
+    ]
+    return jsonify({"room_code": room_code, "players": players}), 200
+
+
 @app.route("/api/rooms/<room_code>/start", methods=["POST"])
 @require_role("teacher")
 def start_room(room_code):
@@ -292,6 +373,20 @@ def start_room(room_code):
     if isinstance(result, str):
         return _lobby_error(result)
     _apply_room_to_session(result)
+    return jsonify(result), 200
+
+
+@app.route("/api/rooms/<room_code>/next", methods=["POST"])
+@require_role("teacher")
+def advance_room(room_code):
+    """
+    ADVANCE_ROOM -- host-paced dispatch: advances the room's shared
+    question index, which is what every player's GET /api/trivia reads
+    from while the room's pacing_mode is 'host'.
+    """
+    result = _unwrap(trivia_data_server.advance_room_question(room_code, session['UUID']))
+    if isinstance(result, str):
+        return _lobby_error(result)
     return jsonify(result), 200
 
 
@@ -310,3 +405,18 @@ def leave_room():
         return _lobby_error(result)
     session.pop('room_code', None)
     return jsonify(result), 200
+
+
+# Lets this file be started directly with `python3 server.py`, in addition
+# to `flask --app server run`. host="0.0.0.0" is the important part for the
+# course's Multi-Host Communication requirement - Flask's own default (used
+# by plain `flask run` with no --host flag, and by app.run() with no host
+# argument) binds to 127.0.0.1 only, which refuses connections from any
+# machine other than the one server.py is running on. Binding 0.0.0.0
+# listens on every network interface, so a browser on a second physical
+# machine / VM on the same network can reach this server at
+# http://<this-machine's-LAN-IP>:8000 . trivia-manager.py still only needs
+# to be reachable from this same machine (it stays on localhost:5555),
+# so it does not need this same change.
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8000)

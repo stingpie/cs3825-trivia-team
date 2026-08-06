@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Real-Time Networked Trivia Platform</title>
+
+  <!-- Google Fonts: Inter for body text, Space Grotesk for headings/numbers -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    /* ============================================================
+       THEME VARIABLES
+       Two color palettes (dark/light) are defined as CSS custom
+       properties on the <html> element via data-theme="dark|light".
+       toggleTheme() (in the script below) flips this attribute,
+       and every rule below just references var(--...) so the whole
+       page re-colors instantly without touching any element classes.
+       ============================================================ */
+    :root[data-theme="dark"] {
+      --bg-base: #090d16;
+      --grid-color: rgba(56, 189, 248, 0.07);
+      --card-bg: rgba(15, 23, 42, 0.75);
+      --card-border: rgba(56, 189, 248, 0.25);
+      --card-glow: rgba(14, 165, 233, 0.15);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent-neon: #00d2ff;
+      --accent-glow: rgba(0, 210, 255, 0.4);
+      --input-bg: rgba(2, 6, 23, 0.7);
+      --header-bg: rgba(15, 23, 42, 0.85);
+      --pill-bg: rgba(30, 41, 59, 0.8);
+      --accent-gold: #f59e0b;
+      --accent-red: #ef4444;
+      --accent-green: #22c55e;
+    }
+
+    :root[data-theme="light"] {
+      --bg-base: #f0f4f9;
+      --grid-color: rgba(14, 165, 233, 0.12);
+      --card-bg: rgba(255, 255, 255, 0.85);
+      --card-border: rgba(14, 165, 233, 0.35);
+      --card-glow: rgba(0, 210, 255, 0.1);
+      --text-main: #0f172a;
+      --text-muted: #475569;
+      --accent-neon: #0284c7;
+      --accent-glow: rgba(2, 132, 199, 0.3);
+      --input-bg: rgba(255, 255, 255, 0.95);
+      --header-bg: rgba(255, 255, 255, 0.9);
+      --pill-bg: rgba(226, 232, 240, 0.8);
+      --accent-gold: #d97706;
+      --accent-red: #dc2626;
+      --accent-green: #16a34a;
+    }
+
+    /* Reset + a blanket transition so theme swaps and hovers animate smoothly
+       on every element. */
+    * { box-sizing: border-box; margin: 0; padding: 0; transition: all 0.2s ease; }
+
+    body {
+      background-color: var(--bg-base);
+      color: var(--text-main);
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      /* Subtle grid-paper background using two repeating linear gradients */
+      background-image: 
+        linear-gradient(to right, var(--grid-color) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--grid-color) 1px, transparent 1px);
+      background-size: 32px 32px;
+    }
+
+    h1, h2, h3, h4, .logo, .stat-value, .pin-display {
+      font-family: 'Space Grotesk', sans-serif;
+      letter-spacing: -0.02em;
+    }
+
+    /* ---------- Header / Top Navigation ---------- */
+    header {
+      background: var(--header-bg);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--card-border);
+      padding: 0.85rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo { font-size: 1.35rem; font-weight: 700; cursor: pointer; }
+    .logo span { color: var(--accent-neon); text-shadow: 0 0 12px var(--accent-glow); }
+
+    .nav-controls { display: flex; align-items: center; gap: 1rem; }
+    nav { display: flex; gap: 0.35rem; background: rgba(0, 0, 0, 0.1); padding: 0.25rem; border-radius: 999px; border: 1px solid var(--card-border); }
+
+    .nav-btn {
+      background: transparent; border: none; color: var(--text-muted);
+      padding: 0.5rem 1.1rem; border-radius: 999px; cursor: pointer;
+      font-size: 0.875rem; font-weight: 600; font-family: 'Space Grotesk', sans-serif;
+    }
+
+    .nav-btn:hover, .nav-btn.active { color: var(--text-main); background: var(--card-bg); box-shadow: 0 0 10px var(--card-glow); }
+
+    .theme-toggle-btn {
+      background: var(--card-bg); border: 1px solid var(--card-border);
+      color: var(--text-main); padding: 0.5rem 0.85rem; border-radius: 0.6rem;
+      cursor: pointer; font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;
+    }
+
+    /* ---------- Main Container & Generic "Glass" Cards ----------
+       Every "page" in this single-page app is a .glass-card with the
+       .view class. Only one .view has .active at a time (see
+       switchView() in the script) - this is how page navigation works
+       without any real routing/reloading. */
+    main { flex: 1; display: flex; justify-content: center; align-items: center; padding: 2.5rem 1.5rem; }
+
+    .glass-card {
+      background: var(--card-bg); backdrop-filter: blur(16px);
+      border: 1px solid var(--card-border); border-radius: 1.25rem;
+      padding: 2.25rem; width: 100%; max-width: 480px; box-shadow: 0 20px 40px var(--card-glow);
+    }
+
+    .glass-card-wide { max-width: 920px; }
+
+    .subtitle { color: var(--text-muted); margin-top: 0.25rem; margin-bottom: 1.5rem; font-size: 0.9rem; }
+
+    /* ---------- Form Components (shared across all forms) ---------- */
+    .form-group { margin-bottom: 1.25rem; }
+    label { display: block; margin-bottom: 0.4rem; font-size: 0.8rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+    input[type="text"], input[type="password"], input[type="email"], select, textarea {
+      width: 100%; padding: 0.85rem 1rem; background: var(--input-bg);
+      border: 1px solid var(--card-border); border-radius: 0.6rem;
+      color: var(--text-main); font-size: 0.95rem; outline: none; font-family: 'Inter', sans-serif;
+    }
+
+    input:focus, select:focus, textarea:focus { border-color: var(--accent-neon); box-shadow: 0 0 12px var(--accent-glow); }
+
+    .btn-neon {
+      width: 100%; padding: 0.85rem; background: var(--accent-neon); color: #000;
+      border: none; border-radius: 0.6rem; font-size: 0.95rem; font-weight: 700;
+      font-family: 'Space Grotesk', sans-serif; cursor: pointer; text-transform: uppercase;
+      letter-spacing: 0.04em; box-shadow: 0 0 15px var(--accent-glow);
+    }
+
+    .btn-neon:hover { opacity: 0.92; box-shadow: 0 0 22px var(--accent-neon); transform: translateY(-1px); }
+
+    .btn-secondary {
+      background: var(--input-bg); border: 1px solid var(--card-border); color: var(--text-main);
+      padding: 0.85rem; border-radius: 0.6rem; font-weight: 600; cursor: pointer; font-family: 'Space Grotesk', sans-serif;
+    }
+
+    .btn-secondary:hover { border-color: var(--accent-neon); }
+
+    /* Page/view switching: every "screen" starts hidden (display:none)
+       and switchView() toggles which one has .active */
+    .view { display: none; }
+    .view.active { display: block; }
+
+    /* ---------- Avatar Trigger Button (opens the avatar modal) ---------- */
+    .avatar-picker-trigger {
+      display: flex; align-items: center; justify-content: space-between;
+      background: var(--input-bg); border: 1px solid var(--card-border);
+      padding: 0.75rem 1rem; border-radius: 0.6rem; cursor: pointer;
+    }
+
+    .avatar-preview-box { display: flex; align-items: center; gap: 0.75rem; }
+    .avatar-preview-icon { font-size: 1.75rem; }
+
+    /* ---------- Generic Modal Overlay (used by avatar picker + quiz builder) ---------- */
+    .modal-overlay {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(0, 0, 0, 0.75); backdrop-filter: blur(8px);
+      display: none; justify-content: center; align-items: center; z-index: 1000;
+    }
+
+    .modal-overlay.active { display: flex; }
+
+    .modal-content {
+      background: var(--card-bg); border: 1px solid var(--card-border);
+      border-radius: 1.25rem; padding: 2rem; width: 90%; max-width: 680px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); max-height: 85vh; overflow-y: auto;
+    }
+
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+    .modal-close { background: none; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; }
+
+    /* ---------- Avatar Modal Grid ----------
+       Displays the selectable avatar-tile options inside #avatar-modal,
+       6 per row, in a scrollable grid. */
+    .avatar-grid-expanded {
+      display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.6rem;
+      max-height: 260px; overflow-y: auto; padding: 0.25rem;
+    }
+
+    .avatar-tile {
+      background: var(--input-bg); border: 1px solid var(--card-border);
+      border-radius: 0.6rem; padding: 0.75rem 0; text-align: center;
+      font-size: 1.6rem; cursor: pointer;
+    }
+
+    .avatar-tile:hover, .avatar-tile.active { border-color: var(--accent-neon); background: rgba(0, 210, 255, 0.18); box-shadow: 0 0 12px var(--accent-glow); }
+
+    /* ---------- Home Page Search + Quiz Grid ---------- */
+    .search-bar-container { display: flex; gap: 0.75rem; margin-bottom: 2rem; }
+    .search-input { flex: 1; }
+
+    .quiz-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1.25rem; margin-top: 1rem; }
+
+    .quiz-card {
+      background: var(--input-bg); border: 1px solid var(--card-border);
+      border-radius: 0.8rem; padding: 1.25rem; display: flex; flex-direction: column; justify-content: space-between;
+      cursor: pointer;
+    }
+
+    .quiz-card:hover { border-color: var(--accent-neon); box-shadow: 0 0 15px var(--card-glow); transform: translateY(-2px); }
+
+    .quiz-tag { font-size: 0.7rem; font-weight: 700; color: var(--accent-neon); text-transform: uppercase; margin-bottom: 0.5rem; }
+
+    /* ---------- Compact Score Bar (multiplayer gameplay view) ---------- */
+    .compact-score-bar {
+      display: flex; justify-content: space-between; align-items: center;
+      background: var(--input-bg); border: 1px solid var(--card-border);
+      padding: 0.4rem 0.85rem; border-radius: 0.6rem; margin-bottom: 1rem; font-size: 0.8rem;
+    }
+
+    .compact-score-item { display: flex; align-items: center; gap: 0.3rem; }
+    .compact-label { color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase; font-weight: 600; }
+    .compact-val { font-weight: 700; color: var(--accent-neon); font-family: 'Space Grotesk', sans-serif; }
+
+    /* ---------- SOLO ARCADE CARD (single-player practice mode) ---------- */
+    .solo-arcade-card {
+      background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 27, 75, 0.95));
+      border: 2px solid var(--accent-gold);
+      box-shadow: 0 0 35px rgba(245, 158, 11, 0.25);
+      border-radius: 1.5rem; padding: 2.25rem; max-width: 560px; width: 100%;
+    }
+
+    .arcade-hud-bar {
+      display: flex; justify-content: space-between; align-items: center;
+      background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(245, 158, 11, 0.3);
+      padding: 0.6rem 1rem; border-radius: 0.75rem; margin-bottom: 1.25rem;
+    }
+
+    /* ---------- Answer Feedback Banner (correct/incorrect flash message) ---------- */
+    .answer-feedback-banner {
+      padding: 0.75rem 1rem; border-radius: 0.6rem; font-size: 0.85rem; font-weight: 600;
+      margin-top: 1rem; display: none;
+    }
+
+    .feedback-correct { background: rgba(34, 197, 94, 0.2); border: 1px solid var(--accent-green); color: #4ade80; }
+    .feedback-incorrect { background: rgba(239, 68, 68, 0.2); border: 1px solid var(--accent-red); color: #f87171; }
+
+    /* ---------- Stats & Dashboard ---------- */
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    .stat-box { background: var(--input-bg); border: 1px solid var(--card-border); border-radius: 0.8rem; padding: 1rem; text-align: center; }
+    .stat-value { font-size: 1.5rem; font-weight: 700; color: var(--accent-neon); }
+    .stat-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; margin-top: 0.25rem; }
+
+    .badge { display: inline-block; background: rgba(0, 210, 255, 0.12); border: 1px solid var(--accent-neon); color: var(--accent-neon); padding: 0.3rem 0.8rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; }
+    .player-pill { display: flex; align-items: center; gap: 0.5rem; background: var(--pill-bg); border: 1px solid var(--card-border); padding: 0.35rem 0.85rem; border-radius: 999px; font-weight: 600; font-size: 0.85rem; }
+
+    /* ---------- Dynamic Question Builder Cards (teacher's "Build Quiz" modal) ---------- */
+    .builder-question-card {
+      background: var(--input-bg); border: 1px solid var(--card-border);
+      border-radius: 0.8rem; padding: 1.25rem; margin-bottom: 1rem; position: relative;
+    }
+
+    .builder-remove-btn {
+      position: absolute; top: 0.75rem; right: 0.75rem; background: transparent;
+      border: none; color: var(--accent-red); font-weight: 700; cursor: pointer;
+    }
+
+    .dynamic-answer-container {
+      background: rgba(0, 0, 0, 0.2); border: 1px solid var(--card-border);
+      border-radius: 0.6rem; padding: 0.85rem; margin-top: 0.75rem;
+    }
+
+    .choice-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+
+    /* ---------- Full-Page Quiz Detail View Items ---------- */
+    .fullpage-question-card {
+      background: var(--input-bg); border: 1px solid var(--card-border);
+      border-radius: 0.8rem; padding: 1.25rem; margin-bottom: 1rem;
+    }
+
+    .fullpage-choice-item {
+      padding: 0.5rem 0.85rem; background: var(--card-bg); border: 1px solid var(--card-border);
+      border-radius: 0.5rem; margin-top: 0.4rem; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem;
+    }
+
+    /* ---------- Host Toolbar Controls (live session host screen) ---------- */
+    .host-toolbar {
+      display: flex; gap: 0.5rem; margin-bottom: 1.25rem; background: var(--input-bg);
+      border: 1px solid var(--card-border); padding: 0.5rem; border-radius: 0.8rem;
+    }
+
+    .host-tool-btn {
+      flex: 1; background: transparent; border: 1px solid var(--card-border);
+      color: var(--text-muted); padding: 0.5rem; border-radius: 0.5rem;
+      font-size: 0.75rem; font-weight: 700; cursor: pointer; text-transform: uppercase;
+    }
+
+    .host-tool-btn:hover { color: var(--text-main); border-color: var(--accent-neon); }
+
+    /* ---------- Mode Selection Pill Buttons (self-paced vs host-paced) ---------- */
+    .mode-select-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.25rem;
+    }
+
+    .mode-option-card {
+      background: var(--input-bg); border: 1px solid var(--card-border);
+      border-radius: 0.8rem; padding: 1rem; text-align: center; cursor: pointer;
+    }
+
+    .mode-option-card:hover, .mode-option-card.selected {
+      border-color: var(--accent-neon); background: rgba(0, 210, 255, 0.12); box-shadow: 0 0 12px var(--card-glow);
+    }
+
+    .timer-circle-box {
+      width: 60px; height: 60px; border-radius: 50%;
+      border: 3px solid var(--accent-neon); display: flex;
+      align-items: center; justify-content: center;
+      font-size: 1.25rem; font-weight: 700; font-family: 'Space Grotesk', sans-serif;
+      color: var(--accent-neon); box-shadow: 0 0 12px var(--accent-glow);
+    }
+
+    /* ---------- Tables (host standings + dashboard history) ---------- */
+    .history-table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.875rem; }
+    .history-table th, .history-table td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--card-border); }
+    .history-table th { color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; }
+
+    /* ---------- Custom Toast Popup (bottom-right notifications) ---------- */
+    #toast-container {
+      position: fixed; bottom: 2rem; right: 2rem; z-index: 2000;
+      display: flex; flex-direction: column; gap: 0.75rem;
+    }
+
+    .toast-popup {
+      background: var(--card-bg); backdrop-filter: blur(16px);
+      border: 1px solid var(--accent-neon); border-radius: 0.75rem;
+      padding: 1rem 1.25rem; min-width: 280px; box-shadow: 0 10px 30px var(--card-glow);
+      display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+      animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
+    /* ---------- Mobile Responsive Fixes (No Horizontal Scroll) ---------- */
+    @media (max-width: 768px) {
+      header {
+        flex-direction: column;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.75rem 0.5rem;
+      }
+
+      .nav-controls {
+        flex-direction: column;
+        width: 100%;
+        gap: 0.5rem;
+      }
+
+      nav {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.3rem;
+        width: 100%;
+        background: rgba(0, 0, 0, 0.2);
+        padding: 0.35rem;
+        border-radius: 0.8rem;
+      }
+
+      .nav-btn {
+        padding: 0.4rem 0.5rem;
+        font-size: 0.75rem;
+        text-align: center;
+        width: 100%;
+        white-space: normal;
+      }
+
+      main {
+        padding: 1rem 0.5rem;
+      }
+
+      .glass-card {
+        padding: 1.25rem 0.85rem;
+      }
+
+      .quiz-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .mode-select-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .avatar-grid-expanded {
+        grid-template-columns: repeat(4, 1fr);
+      }
+
+      .search-bar-container {
+        flex-direction: column;
+      }
+
+      .host-toolbar {
+        flex-wrap: wrap;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ============================================================
+       NAVIGATION HEADER
+       Always visible at the top. The nav buttons call switchView()
+       to swap which .view is shown - there is no real page routing,
+       it's all one HTML document with sections toggled on/off.
+       ============================================================ -->
+  <header>
+    <div class="logo" onclick="switchView('home-view')">TRIVIA<span>ENGINE</span></div>
+    <div class="nav-controls">
+      <nav>
+        <button class="nav-btn active" onclick="switchView('home-view')">Home / Explore</button>
+        <button class="nav-btn" onclick="switchView('join-view')">Join Room</button>
+        <button class="nav-btn" onclick="switchView('dashboard-view')">My Activity & Stats</button>
+        <button class="nav-btn" id="login-nav-btn" onclick="switchView('login-view')">Login</button>
+      </nav>
+
+      <!-- Shown instead of the Login button once setLoggedInUser() runs -->
+      <div id="user-profile-badge" class="player-pill" style="display: none; background: rgba(0,210,255,0.1); border-color: var(--accent-neon);">
+        <span id="nav-user-icon">👤</span>
+        <span id="nav-user-name" style="color: var(--accent-neon);">User</span>
+        <button onclick="handleLogout()" style="background: transparent; border: none; color: var(--accent-red); cursor: pointer; font-weight: 700; margin-left: 0.5rem;">✕</button>
+      </div>
+
+      <button class="theme-toggle-btn" onclick="toggleTheme()">
+        <span id="theme-icon">🌙</span> <span id="theme-text">Dark</span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ============================================================
+         PAGE 1: Home / Explore
+         Shows a searchable grid of "base quizzes". Clicking a card
+         opens the full quiz detail page; the Solo/Host buttons on
+         each card jump straight into that mode.
+         ============================================================ -->
+    <div id="home-view" class="glass-card glass-card-wide view active">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+        <div>
+          <h2>Explore Quizzes</h2>
+          <p class="subtitle" style="margin: 0;">Click any quiz to open its full detail view, inspect questions, or launch a game.</p>
+        </div>
+        <button class="btn-neon" style="width: auto; padding: 0.6rem 1.25rem;" onclick="openModal('add-quiz-modal')">+ Build New Quiz</button>
+      </div>
+
+      <!-- Filters the quiz cards below via filterQuizzes() (see script),
+           live as you type and also on clicking Search. -->
+      <div class="search-bar-container">
+        <input type="text" id="quiz-search-input" class="search-input" placeholder="🔍 Search base quizzes (e.g. Computer Science, History)..." oninput="filterQuizzes()">
+        <button class="btn-secondary" style="padding: 0 1.5rem;" onclick="filterQuizzes()">Search</button>
+      </div>
+
+      <label>Featured Base Quizzes</label>
+      <div class="quiz-grid">
+        <!-- Quiz Card 1: matches the "Networking Protocols" entry in quizDatabase -->
+        <div class="quiz-card" onclick="openFullQuizPage('Networking Protocols')">
+          <div>
+            <div class="quiz-tag">Computer Science</div>
+            <h3>Networking Protocols</h3>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0.5rem 0;">3 Questions • Short Answer & Choice</p>
+          </div>
+          <!-- stopPropagation so clicking Solo/Host doesn't ALSO trigger the card's own onclick -->
+          <div style="display: flex; gap: 0.5rem; margin-top: 1rem;" onclick="event.stopPropagation();">
+            <button class="btn-secondary" style="flex: 1; padding: 0.5rem;" onclick="startSoloPlay('Networking Protocols')">Solo</button>
+            <button class="btn-neon" style="flex: 1; padding: 0.5rem;" onclick="openHostSetup('Networking Protocols')">Host 📺</button>
+          </div>
+        </div>
+
+        <!-- Quiz Card 2: matches the "World History Essentials" entry in quizDatabase -->
+        <div class="quiz-card" onclick="openFullQuizPage('World History Essentials')">
+          <div>
+            <div class="quiz-tag">General Knowledge</div>
+            <h3>World History Essentials</h3>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0.5rem 0;">2 Questions • Multiple Type</p>
+          </div>
+          <div style="display: flex; gap: 0.5rem; margin-top: 1rem;" onclick="event.stopPropagation();">
+            <button class="btn-secondary" style="flex: 1; padding: 0.5rem;" onclick="startSoloPlay('World History Essentials')">Solo</button>
+            <button class="btn-neon" style="flex: 1; padding: 0.5rem;" onclick="openHostSetup('World History Essentials')">Host 📺</button>
+          </div>
+        </div>
+
+        <!-- Quiz Card 3: matches the "Web Security & Cryptography" entry in
+             quizDatabase - Solo/Host on this card loads its own questions
+             (see activeQuizTitle in the script). -->
+        <div class="quiz-card" onclick="openFullQuizPage('Web Security & Cryptography')">
+          <div>
+            <div class="quiz-tag">Cybersecurity</div>
+            <h3>Web Security & Cryptography</h3>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0.5rem 0;">2 Questions • Smart Evaluation</p>
+          </div>
+          <div style="display: flex; gap: 0.5rem; margin-top: 1rem;" onclick="event.stopPropagation();">
+            <button class="btn-secondary" style="flex: 1; padding: 0.5rem;" onclick="startSoloPlay('Web Security & Cryptography')">Solo</button>
+            <button class="btn-neon" style="flex: 1; padding: 0.5rem;" onclick="openHostSetup('Web Security & Cryptography')">Host 📺</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         PAGE 1B: Full Dedicated Quiz Detail Page
+         Populated dynamically by openFullQuizPage() / renderFullpageQuestions().
+         ============================================================ -->
+    <div id="quiz-detail-view" class="glass-card glass-card-wide view">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; border-bottom: 1px solid var(--card-border); padding-bottom: 1rem;">
+        <div>
+          <button class="btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem; margin-bottom: 0.5rem;" onclick="switchView('home-view')">← Back to Explore</button>
+          <h2 id="fullpage-quiz-title">Quiz Title</h2>
+          <span class="badge" id="fullpage-quiz-tag">Category</span>
+        </div>
+        <div style="display: flex; gap: 0.75rem;">
+          <!-- These two buttons get their onclick handlers assigned dynamically
+               in openFullQuizPage() (not hardcoded here), so they always
+               launch Solo/Host for whichever quiz is currently displayed. -->
+          <button class="btn-secondary" style="padding: 0.75rem 1.25rem;" id="fullpage-solo-btn">Play Solo Practice</button>
+          <button class="btn-neon" style="padding: 0.75rem 1.25rem; width: auto;" id="fullpage-host-btn">Host Live Session 📺</button>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem;">
+        <label style="margin: 0;">Question Overview (<span id="fullpage-question-count">0</span> Questions)</label>
+        <button class="btn-secondary" style="padding: 0.35rem 0.85rem; font-size: 0.8rem;" onclick="toggleFullpageAnswerKeys()">Toggle Answer Keys 👁️</button>
+      </div>
+
+      <div id="fullpage-questions-container">
+        <!-- Questions rendered dynamically by renderFullpageQuestions() -->
+      </div>
+    </div>
+
+    <!-- ============================================================
+         PAGE 2: Join Room Screen (student flow for a live/host session)
+         ============================================================ -->
+    <div id="join-view" class="glass-card view">
+      <h2>Join Game Lobby</h2>
+      <p class="subtitle">Customize your avatar and enter your session room pin.</p>
+      
+      <form onsubmit="handleJoinGame(event)">
+        <div class="form-group">
+          <label>Player Character</label>
+          <div class="avatar-picker-trigger" onclick="openModal('avatar-modal')">
+            <div class="avatar-preview-box">
+              <span class="avatar-preview-icon" id="selected-avatar-icon">👾</span>
+              <div>
+                <div style="font-weight: 600; font-size: 0.9rem;" id="selected-avatar-label">Neon Invader</div>
+                <div style="font-size: 0.75rem; color: var(--text-muted);">Click to browse 12 avatars</div>
+              </div>
+            </div>
+            <span style="color: var(--accent-neon); font-weight: 700;">Change ⚙️</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="room">Room Code</label>
+          <input type="text" id="room" placeholder="4821" maxlength="4" style="text-align: center; font-size: 1.5rem; font-family: 'Space Grotesk', sans-serif; letter-spacing: 0.25rem;" required>
+        </div>
+
+        <div class="form-group">
+          <label for="name">Display Name</label>
+          <input type="text" id="name" placeholder="Student Name" required>
+        </div>
+
+        <button type="submit" class="btn-neon">Enter Lobby</button>
+      </form>
+    </div>
+
+    <!-- ============================================================
+         PAGE 3: Student (Multiplayer) Gameplay View
+         Used when a student joins a live host session.
+         ============================================================ -->
+    <div id="gameplay-view" class="glass-card view">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+        <div class="badge" id="question-progress-badge">Question 1 of 3</div>
+        <div class="player-pill">
+          <span id="player-avatar-display">👾</span>
+          <span id="player-name-display">Student</span>
+        </div>
+      </div>
+
+      <div class="compact-score-bar">
+        <div class="compact-score-item">
+          <span class="compact-label">Score:</span>
+          <span class="compact-val" id="player-score">0</span>
+        </div>
+        <div class="compact-score-item">
+          <span class="compact-label">Streak:</span>
+          <span class="compact-val" style="color: var(--accent-gold);" id="player-streak">🔥 0x</span>
+        </div>
+      </div>
+
+      <h3 id="current-question-text" style="margin-bottom: 1.25rem; line-height: 1.4; font-size: 1.1rem;">Loading Question...</h3>
+      
+      <!-- A single free-text field handles every question type here
+           (short answer, multiple choice, true/false, multiple select) -
+           for multiple select, the player comma-separates their picks. -->
+      <form onsubmit="handleAnswerSubmit(event)">
+        <div class="form-group">
+          <label for="ans">Open-Ended Short Answer</label>
+          <input type="text" id="ans" placeholder="Type response... (for multi-answer questions, separate with commas)" required autocomplete="off">
+        </div>
+        <button type="submit" class="btn-neon">Submit Answer ➔</button>
+      </form>
+    </div>
+
+    <!-- ============================================================
+         PAGE 3B: Solo Practice Arcade (single-player, no room needed)
+         ============================================================ -->
+    <div id="solo-gameplay-view" class="solo-arcade-card view">
+      <div class="arcade-hud-bar">
+        <div>
+          <span style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 700; font-family: 'Space Grotesk', sans-serif;">🕹️ SOLO PRACTICE</span>
+          <div style="font-size: 1.2rem; font-weight: 700; color: #fff;" id="solo-progress-badge">Q 1 / 3</div>
+        </div>
+        <div style="text-align: right;">
+          <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">ACCURACY RATE</span>
+          <div style="font-size: 1.2rem; font-weight: 700; color: var(--accent-green);" id="solo-accuracy-val">100%</div>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-muted); font-weight: 600; margin-bottom: 0.5rem;">
+        <span>TOTAL SCORE</span>
+        <span id="solo-score-val" style="color: var(--accent-neon); font-weight: 700; font-size: 1rem;">0 PTS</span>
+      </div>
+
+      <h3 id="solo-question-text" style="margin: 1rem 0; line-height: 1.4; font-size: 1.15rem; text-shadow: 0 0 10px rgba(255,255,255,0.1);">Loading Solo Question...</h3>
+
+      <form onsubmit="handleSoloAnswerSubmit(event)">
+        <div class="form-group">
+          <label for="solo-ans" style="color: var(--accent-gold);">Your Response</label>
+          <input type="text" id="solo-ans" placeholder="Type answer here... (comma-separate multiple answers)" required autocomplete="off" style="border-color: rgba(245, 158, 11, 0.4);">
+        </div>
+        <button type="submit" class="btn-neon" style="background: var(--accent-gold); box-shadow: 0 0 15px rgba(245, 158, 11, 0.4);">Submit Response ➔</button>
+      </form>
+
+      <div id="solo-feedback-banner" class="answer-feedback-banner"></div>
+    </div>
+
+    <!-- ============================================================
+         PAGE 4A: Host Setup (choose pacing before generating a room PIN)
+         ============================================================ -->
+    <div id="host-setup-view" class="glass-card view">
+      <h2>Host Session Setup</h2>
+      <p class="subtitle">Choose how students will progress through this session.</p>
+
+      <form onsubmit="launchHostLobby(event)">
+        <div class="form-group">
+          <label>Selected Quiz</label>
+          <input type="text" id="host-quiz-title" value="Networking Protocols" readonly style="font-weight: 700; color: var(--accent-neon);">
+        </div>
+
+        <!-- PACING SELECTION: self-paced (students go at their own speed)
+             vs host-paced (host manually / on a timer advances everyone together) -->
+        <label>Session Pacing Mode</label>
+        <div class="mode-select-grid">
+          <div class="mode-option-card selected" id="mode-card-self" onclick="selectPacingMode('self')">
+            <div style="font-size: 1.5rem; margin-bottom: 0.25rem;">⚡</div>
+            <div style="font-weight: 700; font-size: 0.9rem;">Self-Paced</div>
+            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">Students speed ahead independently</div>
+          </div>
+
+          <div class="mode-option-card" id="mode-card-host" onclick="selectPacingMode('host')">
+            <div style="font-size: 1.5rem; margin-bottom: 0.25rem;">📺</div>
+            <div style="font-weight: 700; font-size: 0.9rem;">Host-Paced</div>
+            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">Host controls question dispatches</div>
+          </div>
+        </div>
+
+        <!-- Only shown when Host-Paced mode is selected (toggled by selectPacingMode) -->
+        <div id="host-paced-settings-group" style="display: none; border-top: 1px solid var(--card-border); padding-top: 1.25rem; margin-top: 1rem;">
+          <h4 style="margin-bottom: 0.75rem; font-size: 0.9rem; color: var(--accent-neon);">Host-Paced Custom Settings</h4>
+          
+          <div class="form-group">
+            <label>Enable Question Countdown Timer?</label>
+            <select id="host-enable-timer-select" onchange="toggleTimerDurationDropdown()">
+              <option value="no">No Timer (Manual Host Dispatches)</option>
+              <option value="yes">Yes (Enable Countdown Timer)</option>
+            </select>
+          </div>
+
+          <div class="form-group" id="timer-duration-wrapper" style="display: none;">
+            <label>Countdown Timer Duration</label>
+            <select id="host-timer-duration">
+              <option value="15">15 Seconds</option>
+              <option value="30" selected>30 Seconds</option>
+              <option value="60">60 Seconds</option>
+            </select>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-neon" style="margin-top: 1rem;">Generate Session Room PIN ➔</button>
+      </form>
+    </div>
+
+    <!-- ============================================================
+         PAGE 4B: Live Scoreboard & Host Panel
+         Shown after launchHostLobby() generates a room PIN.
+         ============================================================ -->
+    <div id="host-scoreboard-view" class="glass-card glass-card-wide view">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid var(--card-border); padding-bottom: 1rem;">
+        <div>
+          <span class="badge" id="host-mode-badge" style="margin-bottom: 0.25rem;">SELF-PACED SESSION</span>
+          <h2>Live Session Host Display</h2>
+        </div>
+        <div style="text-align: right;">
+          <label style="margin-bottom: 0;">JOIN PIN</label>
+          <div style="font-size: 2rem; font-weight: 700; color: var(--accent-neon);" id="host-pin-display">#----</div>
+        </div>
+      </div>
+
+      <!-- Host Toolbar Controls: "Start Session" flips the room from
+           waiting -> active via POST /api/rooms/<code>/start (host-only).
+           "End Session" tells the backend the host left
+           (POST /api/rooms/leave), which ends the room for everyone. -->
+      <div class="host-toolbar">
+        <button class="host-tool-btn" id="host-start-session-btn" onclick="handleStartRoom()" style="display:none;">▶️ Start Session</button>
+        <button class="host-tool-btn" style="color: var(--accent-red);" onclick="handleEndSession()">End Session</button>
+      </div>
+
+      <!-- Only visible in Host-Paced mode: manual/timed "Next Question"
+           control. #host-current-q-label is kept in sync by
+           updateHostCurrentQuestionLabel() (called from launchHostLobby and
+           dispatchNextHostQuestion), showing "Question X of Y" for the quiz
+           being hosted, based on the local quizDatabase question count. -->
+      <div id="host-paced-control-container" style="margin-bottom: 1.5rem; display: none; align-items: center; justify-content: space-between; background: var(--input-bg); border: 1px solid var(--card-border); padding: 1rem; border-radius: 0.8rem;">
+        <div>
+          <label style="margin-bottom: 0.2rem;">HOST DISPATCH CONTROL</label>
+          <div style="font-size: 0.85rem; color: var(--text-muted);" id="host-current-q-label">Current Question: Loading...</div>
+        </div>
+        
+        <div class="timer-circle-box" id="host-timer-display" style="display: none;">30</div>
+
+        <button class="btn-neon" style="width: auto; padding: 0.75rem 1.5rem;" onclick="dispatchNextHostQuestion()">Next Question ➔</button>
+      </div>
+
+      <!-- Only visible in Self-Paced mode -->
+      <div id="student-paced-status-container" style="margin-bottom: 1.5rem;">
+        <div style="background: var(--input-bg); border: 1px solid var(--card-border); padding: 1rem; border-radius: 0.8rem; font-size: 0.85rem; color: var(--accent-neon);">
+          ⚡ Self-Paced Mode Active: Players progress independently. No manual question dispatches required.
+        </div>
+      </div>
+
+      <!-- Populated by pollRoomStandings(), which polls both
+           GET /api/rooms/<room_code> (roster) and
+           GET /api/rooms/<room_code>/connectivity (heartbeat-based
+           online/offline status) every 3s while this view is active.
+           Score/progress per player isn't exposed by the room API, so
+           that column stays as a placeholder note. -->
+      <label>Live Player Standings</label>
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Player</th>
+            <th>Role</th>
+            <th>Status</th>
+            <th>Score / Progress</th>
+          </tr>
+        </thead>
+        <tbody id="host-standings-tbody">
+          <tr>
+            <td colspan="5" style="text-align: center; color: var(--text-muted);">Waiting for players to join room...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ============================================================
+         PAGE 5: User Activity Dashboard
+         Shows locally-tracked stats (userStats) - see recordGameResult().
+         ============================================================ -->
+    <div id="dashboard-view" class="glass-card glass-card-wide view">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <h2>My Activity & Performance Dashboard</h2>
+        <span class="badge" id="dash-role-badge">GUEST SESSION</span>
+      </div>
+      <p class="subtitle" id="dash-subtitle-text">Overview of your played trivia games, accuracy, and streak records.</p>
+
+      <!-- Shown only when not logged in (currentUser === null) -->
+      <div id="dash-guest-warning" style="background: rgba(245, 158, 11, 0.12); border: 1px solid var(--accent-gold); padding: 0.85rem 1.25rem; border-radius: 0.8rem; margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 0.85rem; color: var(--accent-gold);">🎮 Playing as <strong>Guest</strong>. Stats are temporary. Sign up or log in to save global history!</span>
+        <button class="btn-neon" style="width: auto; padding: 0.4rem 0.85rem; font-size: 0.75rem;" onclick="switchView('signup-view')">Create Free Account</button>
+      </div>
+
+      <!-- Shown only for logged-in users with role === 'teacher' -->
+      <div id="dash-teacher-panel" style="display: none; background: rgba(0, 210, 255, 0.08); border: 1px solid var(--accent-neon); padding: 1.25rem; border-radius: 0.8rem; margin-bottom: 1.5rem;">
+        <h3 style="color: var(--accent-neon); margin-bottom: 0.5rem;">🎓 Teacher Control Panel</h3>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">Manage class quizzes, review answer keys, and launch live host games.</p>
+        <div style="display: flex; gap: 0.75rem;">
+          <button class="btn-neon" style="width: auto; padding: 0.5rem 1rem; font-size: 0.85rem;" onclick="openModal('add-quiz-modal')">+ Create Quiz Set</button>
+          <button class="btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.85rem;" onclick="exportStudentGrades()">Export Student Grades</button>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-box"><div class="stat-value" id="dash-stat-games">0</div><div class="stat-label">Games Played</div></div>
+        <div class="stat-box"><div class="stat-value" id="dash-stat-acc">0%</div><div class="stat-label">Avg Accuracy</div></div>
+        <div class="stat-box"><div class="stat-value" id="dash-stat-streak">🔥 0</div><div class="stat-label">Best Streak</div></div>
+        <div class="stat-box"><div class="stat-value" id="dash-stat-points">0</div><div class="stat-label">Total Points</div></div>
+      </div>
+
+      <label>Recent Game History & Activity</label>
+      <table class="history-table">
+        <thead><tr><th>Quiz Title</th><th>Role</th><th>Score / Result</th><th>Accuracy</th><th>Date</th></tr></thead>
+        <tbody id="dash-history-rows">
+          <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No game history recorded yet. Play a solo or live game!</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ============================================================
+         PAGE 6: User Login
+         ============================================================ -->
+    <div id="login-view" class="glass-card view">
+      <h2>User Authentication</h2>
+      <p class="subtitle">Sign in to sync your activity stats across devices.</p>
+      <form onsubmit="handleAuthSubmit(event)">
+        <div class="form-group"><label for="user">Username</label><input type="text" id="user" placeholder="username" required></div>
+        <div class="form-group"><label for="pass">Password</label><input type="password" id="pass" placeholder="••••••••" required></div>
+        <button type="submit" class="btn-neon">Sign In</button>
+      </form>
+      <p style="margin-top: 1.25rem; font-size: 0.85rem; text-align: center; color: var(--text-muted);">
+        Don't have an account? <a href="#" style="color: var(--accent-neon); text-decoration: none; font-weight: 600;" onclick="switchView('signup-view')">Sign up here</a>
+      </p>
+    </div>
+
+    <!-- ============================================================
+         PAGE 7: User Sign-Up
+         ============================================================ -->
+    <div id="signup-view" class="glass-card view">
+      <h2>Create an Account</h2>
+      <p class="subtitle">Join TriviaEngine to track scores and build quizzes.</p>
+      <!-- Shares handleAuthSubmit() with the login form - the function
+           tells the two cases apart by checking which view is currently active -->
+      <form onsubmit="handleAuthSubmit(event)">
+        <div class="form-group">
+          <label for="signup-name">Full Name</label>
+          <input type="text" id="signup-name" placeholder="Your Name" required>
+        </div>
+        <div class="form-group">
+          <label for="signup-email">Username</label>
+          <input type="text" id="signup-email" placeholder="username" required>
+        </div>
+        <div class="form-group">
+          <label for="signup-pass">Password</label>
+          <input type="password" id="signup-pass" placeholder="Create password" required>
+        </div>
+        <div class="form-group">
+          <label for="signup-role">Account Privilege Role</label>
+          <select id="signup-role">
+            <option value="student">Student Player</option>
+            <option value="teacher">Teacher / Instructor</option>
+          </select>
+        </div>
+        <button type="submit" class="btn-neon">Create Account</button>
+      </form>
+      <p style="margin-top: 1.25rem; font-size: 0.85rem; text-align: center; color: var(--text-muted);">
+        Already have an account? <a href="#" style="color: var(--accent-neon); text-decoration: none; font-weight: 600;" onclick="switchView('login-view')">Log in</a>
+      </p>
+    </div>
+  </main>
+
+  <!-- Toast notifications get appended here by showCustomToast() -->
+  <div id="toast-container"></div>
+
+  <!-- ============================================================
+       MODAL 1: Avatar Selector Popup
+       Offers 12 avatar-tile options, matching the "browse 12 avatars"
+       copy on the Join Room page.
+       ============================================================ -->
+  <div id="avatar-modal" class="modal-overlay">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Select Character Avatar</h3>
+        <button class="modal-close" onclick="closeModal('avatar-modal')">✕</button>
+      </div>
+      <div id="tab-gaming" class="avatar-grid-expanded">
+        <div class="avatar-tile active" onclick="setAvatar('👾', 'Neon Invader')">👾</div>
+        <div class="avatar-tile" onclick="setAvatar('🤖', 'Cyber Bot')">🤖</div>
+        <div class="avatar-tile" onclick="setAvatar('⚡', 'Volt Energy')">⚡</div>
+        <div class="avatar-tile" onclick="setAvatar('🎮', 'Game Master')">🎮</div>
+        <div class="avatar-tile" onclick="setAvatar('🦊', 'Fox Runner')">🦊</div>
+        <div class="avatar-tile" onclick="setAvatar('🐙', 'Octo Coder')">🐙</div>
+        <div class="avatar-tile" onclick="setAvatar('🚀', 'Rocket Ranger')">🚀</div>
+        <div class="avatar-tile" onclick="setAvatar('🧠', 'Brainiac')">🧠</div>
+        <div class="avatar-tile" onclick="setAvatar('🐉', 'Dragon Byte')">🐉</div>
+        <div class="avatar-tile" onclick="setAvatar('🕹️', 'Retro Gamer')">🕹️</div>
+        <div class="avatar-tile" onclick="setAvatar('🛰️', 'Satellite Sam')">🛰️</div>
+        <div class="avatar-tile" onclick="setAvatar('🔮', 'Mystic Orb')">🔮</div>
+      </div>
+      <button class="btn-neon" style="margin-top: 1.5rem;" onclick="closeModal('avatar-modal')">Confirm Character</button>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       MODAL 2: Interactive Question Builder (teacher creates a new quiz set)
+       Each "Add Question" click appends a .builder-question-card, and
+       the answer inputs inside it change shape depending on question type
+       (see updateAnswerFields()). Saving posts the whole quiz to the backend.
+       ============================================================ -->
+  <div id="add-quiz-modal" class="modal-overlay">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Build or Import Quiz</h3>
+        <button class="modal-close" onclick="closeModal('add-quiz-modal')">✕</button>
+      </div>
+
+      <div class="form-group">
+        <label>Quiz Title</label>
+        <input type="text" id="builder-quiz-title" placeholder="e.g. Data Structures Midterm Review">
+      </div>
+
+      <div style="margin: 1.5rem 0; border-top: 1px solid var(--card-border); padding-top: 1rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <label style="margin: 0;">Interactive Question Builder</label>
+          <button class="btn-secondary" style="padding: 0.35rem 0.85rem; font-size: 0.8rem;" onclick="addQuestionToBuilder()">+ Add Question</button>
+        </div>
+
+        <div id="builder-questions-list"></div>
+      </div>
+
+      <button class="btn-neon" onclick="handleSaveBuilderQuiz()">Save Complete Quiz to Server ➔</button>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
