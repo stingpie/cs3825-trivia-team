@@ -16,20 +16,7 @@ from security import (
 from reliability import record_heartbeat, save_reconnect_state, load_reconnect_state, clear_reconnect_state, is_connected
 # -----------------------------------------------------------------------------
 
-# Bug fix: Flask defaults to looking for a lowercase "templates" folder and
-# a lowercase "static" folder, but this repo's folders are "Templates" and
-# "Static". On a case-insensitive filesystem (Windows, default macOS) that
-# mismatch is silently forgiven, so it never showed up in local dev -- but
-# on a case-sensitive filesystem (Linux, which is what Render and virtually
-# every real deployment target actually runs), it isn't: render_template()
-# raised TemplateNotFound and the "/" route 500'd instead of serving the
-# app's UI at all, and script.js would 404 the same way. Pointing Flask at
-# the folders that actually exist in this repo fixes both. static_url_path
-# is pinned to "/static" explicitly too -- otherwise Flask derives the URL
-# prefix from static_folder's name and serves everything at "/Static/..."
-# instead, which would silently break the "/static/script.js" reference
-# already baked into Templates/index.html.
-app = Flask(__name__, template_folder="Templates", static_folder="Static", static_url_path="/static")
+app= Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-stable-secret-key-cs3825')
 
 
@@ -165,7 +152,7 @@ def get_trivia():
     if question_idx is None:
         return "No question index found", 400
 
-@app.route("/api/trivia/verify", methods=["GET", "POST"])
+@app.route("/api/trivia/verify", methods=["GET"])
 @require_login
 @require_valid_signature  # J2: rejects tampered SUBMIT_ANSWER-style payloads
 def verify_answer(): # should recieve {'answer':['something seomthing something']} returns {'correct':true|false}
@@ -216,14 +203,7 @@ def create_trivia():
 
 @app.route("/api/users", methods=['POST'])
 def create_user(): # should recieve {'username':"asldjad", "password":"alsdjoa", "role":"student"|"teacher"} returns 201 on success
-    user_info = request.get_json(silent=True) or {}
-    # Bug fix: this used to read user_info['username']/['password'] directly,
-    # so a request missing either field raised an unhandled KeyError and
-    # Flask returned a generic 500 instead of a clean, actionable 400.
-    # Found via testing (Deliverable 2 report, Invalid Input Testing).
-    missing = [f for f in ("username", "password") if not user_info.get(f)]
-    if missing:
-        return jsonify({"error": f"missing required field(s): {', '.join(missing)}"}), 400
+    user_info = request.get_json()
     username = user_info['username']
     password = user_info['password']
     role = user_info.get('role', 'student')  # default to the lower-privilege role
@@ -233,13 +213,8 @@ def create_user(): # should recieve {'username':"asldjad", "password":"alsdjoa",
     result = str(_unwrap(raw_result))
     if result=="username already taken":
         return Response(result, status=409)
-    # issue_login_session returns a fresh per-session HMAC signing token
-    # (see security.py) -- hand it back to the client in the response
-    # body so it can sign write-sensitive requests without ever needing
-    # to know a secret ahead of time. Replaces the old design where every
-    # browser shared one static secret baked into Static/script.js.
-    token = issue_login_session(result, role)
-    return jsonify({"message": "new user created!", "signing_token": token}), 201
+    issue_login_session(result, role)  # sets session['UUID'], session['role'], etc.
+    return Response('new user created!', status=201)
 
 @app.route("/api/login", methods=["POST"])
 def login():  # should receive {'username':..., 'password':...}
@@ -251,11 +226,11 @@ def login():  # should receive {'username':..., 'password':...}
     result = _unwrap(trivia_data_server.get_user_by_credentials(username, password))
     if not result:
         return jsonify({"error": "invalid username or password"}), 401
-    token = issue_login_session(result['UUID'], result['role'])
-    return jsonify({"role": result['role'], "signing_token": token}), 200
+    issue_login_session(result['UUID'], result['role'])
+    return jsonify({"role": result['role']}), 200
 
 
-@app.route("/api/trivia/analytics", methods=["GET", "POST"])
+@app.route("/api/trivia/analytics", methods=["GET"])
 @require_role("teacher")  # J3: students should never see the answer-key-adjacent analytics
 def get_analytics():
     idx_of_trivia_set=request.get_json()['idx_of_trivia_set']
@@ -307,15 +282,6 @@ def reconnect():
     session['question_idx'] = state['question_idx']
     if state.get('room_code'):
         session['room_code'] = state['room_code']
-    # Also hand back this session's signing token. currentSigningToken on
-    # the client is just an in-memory JS variable, so a page reload loses
-    # it even though the Flask session cookie is still valid -- this is
-    # the one path that restores it without asking the player to log in
-    # again mid-game. Known remaining gap: a logged-in user who reloads
-    # with NO saved reconnect state (e.g. a teacher who hasn't opened a
-    # room yet) hits the 404 above instead and has to log in again before
-    # signing anything -- see Future Improvements in the report.
-    state['signing_token'] = session.get('signing_token')
     return jsonify(state)
 
 

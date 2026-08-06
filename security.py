@@ -14,6 +14,7 @@ changes -- see integration notes at the bottom of this file.
 import bcrypt
 import hmac
 import hashlib
+import os
 import time
 import secrets
 from functools import wraps
@@ -49,57 +50,44 @@ def verify_password(plain_password: str, stored_hash: str) -> bool:
 
 
 # HMAC-SHA256 payload integrity
-#
-# Every write-sensitive request is signed with an HMAC-SHA256 of its raw
-# body. The signing key here is NOT one static secret shared by every
-# browser (that was the original design, and its problem is real: a
-# secret embedded in shipped JavaScript is readable by anyone who opens
-# dev tools, so it stops accidental tampering but nothing else). Instead,
-# issue_login_session() below generates a fresh, random, per-session
-# token at login time and hands it back to the client in the login/
-# register response body. Every signed request after that is checked
-# against THAT session's own token (stored server-side in the signed
-# Flask session, session['signing_token']), not a single global secret.
-# A leaked token only ever affects the one session it was issued to, and
-# it stops being useful the moment that session ends.
+
+HMAC_SECRET_KEY = os.environ.get("TRIVIA_HMAC_SECRET", "").encode("utf-8")
+
+if not HMAC_SECRET_KEY:
+    # Fail loudly in dev rather than silently signing with an empty key.
+    HMAC_SECRET_KEY = secrets.token_bytes(32)
+    print("[security.py] WARNING: TRIVIA_HMAC_SECRET not set. "
+          "Generated a temporary key for this process only. "
+          "Set TRIVIA_HMAC_SECRET in your environment for real deployments.")
 
 
-def sign_payload_with_token(raw_body: bytes, token: str) -> str:
+def sign_payload(raw_body: bytes) -> str:
     """
-    Produce a hex HMAC-SHA256 signature for a request body, keyed by a
-    specific session's signing token (not a global secret).
+    Produce a hex HMAC-SHA256 signature for an outgoing raw request body.
+    The client-side (JS) equivalent must use the same secret + algorithm.
     """
-    return hmac.new(token.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    return hmac.new(HMAC_SECRET_KEY, raw_body, hashlib.sha256).hexdigest()
 
 
 def verify_signature(raw_body: bytes, signature_header: str) -> bool:
     """
-    Constant-time comparison of a recomputed HMAC -- keyed by the current
-    Flask session's own signing_token -- against the signature supplied
-    by the client in the X-Signature header. False if there's no
-    signature, or no signing token on this session (e.g. it was never
-    logged in, or the session expired).
+    Constant-time comparison of a recomputed HMAC against the signature
+    supplied by the client in an 'X-Signature' header.
     """
-    token = session.get("signing_token")
-    if not signature_header or not token:
+    if not signature_header:
         return False
-    expected = sign_payload_with_token(raw_body, token)
+    expected = sign_payload(raw_body)
     return hmac.compare_digest(expected, signature_header)
 
 
 def require_valid_signature(view_func):
     """
     Flask route decorator: rejects any request whose body doesn't match
-    the X-Signature header, verified against this session's own signing
-    token (see verify_signature() above). Apply to any route that
-    accepts writes (answer submissions, quiz creation, etc) -- pair with
-    @require_login or @require_role so a signing_token is guaranteed to
-    exist on the session by the time this runs.
+    the X-Signature header. Apply to any route that accepts writes
+    (answer submissions, quiz creation, etc).
     """
     @wraps(view_func)
     def wrapper(*args, **kwargs):
-        if not session.get("signing_token"):
-            return jsonify({"error": "no signing token for this session -- log in again"}), 401
         signature = request.headers.get("X-Signature", "")
         if not verify_signature(request.get_data(), signature):
             return jsonify({"error": "invalid or missing payload signature"}), 400
@@ -153,25 +141,14 @@ def new_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-def issue_login_session(uuid: str, role: str) -> str:
+def issue_login_session(uuid: str, role: str):
     """
     Call this on successful login/registration to populate the Flask
     session in one place, instead of scattering session[...] assignments
     across routes (reduces the risk of forgetting to set 'role').
-
-    Also issues a fresh, random per-session HMAC signing token (see the
-    "HMAC-SHA256 payload integrity" section above) and stores it on the
-    session as session['signing_token']. Returns that token so the
-    calling route can hand it back to the client in the response body --
-    the client needs it to sign write-sensitive requests, and this is
-    the only place it's ever transmitted, over the same HTTPS connection
-    the login itself used.
     """
     session["UUID"] = uuid
     session["role"] = role
     session["idx_of_trivia_set"] = session.get("idx_of_trivia_set", 0)
     session["question_idx"] = session.get("question_idx", 0)
     session["logged_in_at"] = int(time.time())
-    token = new_session_token()
-    session["signing_token"] = token
-    return token
