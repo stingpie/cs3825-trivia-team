@@ -901,9 +901,60 @@
       currentScore = 0; currentStreak = 0; currentQuestionIndex = 0;
       mpCorrectAnswers = 0; mpTotalAttempted = 0; // reset so this game's accuracy is tracked from scratch
       startHeartbeat(); // begin PING-ing every 5s per protocol_spec.json while actively playing
-      await loadMultiplayerQuestion();
       showCustomToast(`Successfully Joined Lobby #${enteredCode}!`);
       switchView('gameplay-view');
+
+      // Bug fix: previously loadMultiplayerQuestion() was called here
+      // unconditionally, so a student could fetch and answer question 0
+      // before the host ever pressed "Start Session" (room.status was
+      // still "waiting"). Now: if we have a live room and it isn't active
+      // yet, show a waiting state and poll until the host starts it.
+      if (activeRoomCode) {
+        try {
+          const roomRes = await fetch(`/api/rooms/${activeRoomCode}`);
+          if (roomRes.ok) {
+            const room = await roomRes.json();
+            if (room.status !== 'active') {
+              waitForRoomToStart();
+              return;
+            }
+          }
+        } catch (e) { /* fall through and try to load a question anyway */ }
+      }
+      await loadMultiplayerQuestion();
+    }
+
+    /**
+     * Shows a "waiting for host" state on the gameplay view and polls
+     * GET /api/rooms/<code> every 2s until status flips to "active",
+     * then loads the first question normally. Pairs with the server-side
+     * 409 in GET /api/trivia for the same "not started yet" case, so even
+     * if a request slips through mid-poll it won't display a question.
+     */
+    function waitForRoomToStart() {
+      document.getElementById('question-progress-badge').innerText = 'Waiting for host...';
+      document.getElementById('current-question-text').innerText = 'Waiting for the host to start the session...';
+      const ansInput = document.getElementById('ans');
+      const submitBtn = document.querySelector('#gameplay-view button[type="submit"]');
+      ansInput.disabled = true;
+      if (submitBtn) submitBtn.disabled = true;
+
+      stopStudentQuestionPolling();
+      studentQuestionPollInterval = setInterval(async () => {
+        if (!activeRoomCode) return;
+        try {
+          const res = await fetch(`/api/rooms/${activeRoomCode}`);
+          if (!res.ok) return;
+          const room = await res.json();
+          if (room.status === 'active') {
+            stopStudentQuestionPolling();
+            ansInput.disabled = false;
+            if (submitBtn) submitBtn.disabled = false;
+            showCustomToast('▶️ The host started the session!');
+            await loadMultiplayerQuestion();
+          }
+        } catch (e) { /* try again next tick */ }
+      }, 2000);
     }
 
     /**
@@ -937,9 +988,15 @@
         lastSeenQuestionText = apiQ.question;
         document.getElementById('current-question-text').innerText = apiQ.question;
         document.getElementById('ans').value = '';
-        // Unlike the fallback branch below, this branch doesn't update
-        // #question-progress-badge ("Question X of Y"), since the API
-        // response doesn't carry a total question count.
+        // Bug fix: this branch used to never touch #question-progress-badge,
+        // so it stayed frozen on index.html's hardcoded "Question 1 of 3"
+        // placeholder for the entire live game. trivia-manager.py's
+        // get_question() now includes question_idx/num_questions, so use
+        // those when present.
+        if (typeof apiQ.question_idx === 'number' && typeof apiQ.num_questions === 'number') {
+          document.getElementById('question-progress-badge').innerText =
+            `Question ${apiQ.question_idx + 1} of ${apiQ.num_questions}`;
+        }
         if (joinedRoomPacingMode === 'host') {
           startStudentQuestionPolling();
         }
@@ -998,6 +1055,10 @@
         lastSeenQuestionText = apiQ.question;
         document.getElementById('current-question-text').innerText = apiQ.question;
         document.getElementById('ans').value = '';
+        if (typeof apiQ.question_idx === 'number' && typeof apiQ.num_questions === 'number') {
+          document.getElementById('question-progress-badge').innerText =
+            `Question ${apiQ.question_idx + 1} of ${apiQ.num_questions}`;
+        }
         showCustomToast('➔ The host moved everyone to the next question.');
       }
     }
@@ -1043,7 +1104,21 @@
         document.getElementById('ans').value = '';
         showCustomToast('Waiting for the host to advance to the next question...');
       } else {
-        await apiNextQuestion();
+        // Bug fix: the {done:true} response from /api/trivia/next was
+        // previously discarded, so the game never noticed it had ended.
+        // server.py rewinds session['question_idx'] back to the last
+        // valid question when it detects the end, so without checking
+        // `done` here, the very next loadMultiplayerQuestion() call just
+        // re-fetched and re-served that same last question forever.
+        const nextResult = await apiNextQuestion();
+        if (nextResult && nextResult.done) {
+          const accuracyPct = mpTotalAttempted > 0 ? Math.round((mpCorrectAnswers / mpTotalAttempted) * 100) : 100;
+          showCustomToast(`Quiz Completed! Final Score: ${currentScore}`);
+          recordGameResult(activeQuizTitle, currentScore, accuracyPct);
+          stopHeartbeat();
+          switchView('dashboard-view');
+          return;
+        }
         currentQuestionIndex++;
         setTimeout(loadMultiplayerQuestion, 1200);
       }
@@ -1530,8 +1605,15 @@
         clearInterval(hostTimerInterval); // stop the host countdown if we navigate away
         stopRoomStandingsPolling();
       }
-      if (viewId !== 'gameplay-view') {
+      // Bug fix: this used to stop the heartbeat whenever the view wasn't
+      // 'gameplay-view', which killed the host's heartbeat the instant
+      // launchHostLobby() switched to 'host-scoreboard-view' right after
+      // starting it -- only one PING ever went out, so the host always
+      // read as "Offline" in the standings table a few seconds later.
+      if (viewId !== 'gameplay-view' && viewId !== 'host-scoreboard-view') {
         stopHeartbeat();
+      }
+      if (viewId !== 'gameplay-view') {
         stopStudentQuestionPolling();
       }
       document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
