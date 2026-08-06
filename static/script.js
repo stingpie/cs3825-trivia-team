@@ -83,7 +83,7 @@
     // A secret embedded in client-side JS is visible to anyone who views
     // source, so this only guards against accidental/incidental tampering,
     // not a malicious client.
-    const HMAC_SHARED_SECRET = "REPLACE_WITH_TEAM_TRIVIA_HMAC_SECRET";
+    const HMAC_SHARED_SECRET = "2ab4343e8f40f233d2eefeb011056eb5";
 
     /* Hardcoded fallback quiz content, used whenever the backend
        (server.py / trivia-manager.py) isn't reachable or hasn't been
