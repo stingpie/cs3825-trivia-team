@@ -7,6 +7,7 @@
        ================================================================ */
 
     let activeAvatar = { icon: '👾', name: 'Neon Invader' };   // currently selected player avatar
+    let currentSigningToken = null;                            // per-session HMAC signing token, set on login/register (see signRequestBody())
     let currentScore = 0;                                      // score for the CURRENT game (solo or multiplayer)
     let currentStreak = 0;                                      // current correct-answer streak
     let currentQuestionIndex = 0;                                // index into whichever question list is active
@@ -75,15 +76,17 @@
     let heartbeatInterval = null;
 
     // security.py's require_valid_signature decorator checks an
-    // X-Signature header against an HMAC-SHA256 of the raw request body,
-    // using a server-side secret (TRIVIA_HMAC_SECRET env var). The browser
-    // computes the same signature to talk to /api/trivia (POST) and
-    // /api/trivia/verify, so this value must be set to whatever the team
-    // is actually using to start server.py / trivia-manager.py.
-    // A secret embedded in client-side JS is visible to anyone who views
-    // source, so this only guards against accidental/incidental tampering,
-    // not a malicious client.
-    const HMAC_SHARED_SECRET = "2ab4343e8f40f233d2eefeb011056eb5";
+    // X-Signature header against an HMAC-SHA256 of the raw request body.
+    // The signing key is a fresh, random token issued per-session by the
+    // server at login/register time (see apiLoginUser/apiRegisterUser
+    // below), not a single secret shared by every browser. This closes
+    // the gap the original design had: a secret baked into shipped JS is
+    // readable by anyone who opens dev tools, so it only ever stopped
+    // accidental/incidental tampering. A per-session token is still
+    // visible to that session's own user, but a leaked token only
+    // affects the one session it was issued to, not every user of the
+    // app, and it's transmitted once, at login, over the same
+    // connection the login itself used -- never hardcoded anywhere.
 
     /* Hardcoded fallback quiz content, used whenever the backend
        (server.py / trivia-manager.py) isn't reachable or hasn't been
@@ -155,15 +158,23 @@
     /**
      * Computes the hex HMAC-SHA256 signature security.py's
      * require_valid_signature() expects in the X-Signature header, using
-     * the Web Crypto API (crypto.subtle). Must be called with the exact
-     * same string that gets sent as the request body - sign first, then
-     * send that identical string, or the signatures won't match.
+     * the Web Crypto API (crypto.subtle) and this session's own signing
+     * token (set by apiLoginUser()/apiRegisterUser() on success). Must
+     * be called with the exact same string that gets sent as the request
+     * body - sign first, then send that identical string, or the
+     * signatures won't match. Throws if called before login/register has
+     * set currentSigningToken -- callers should already be behind a
+     * login-required flow by the time they need to sign anything, so
+     * this is a loud failure rather than silently signing with nothing.
      */
     async function signRequestBody(bodyString) {
+      if (!currentSigningToken) {
+        throw new Error('No signing token yet -- log in before signing a request.');
+      }
       const encoder = new TextEncoder();
       const key = await crypto.subtle.importKey(
         'raw',
-        encoder.encode(HMAC_SHARED_SECRET),
+        encoder.encode(currentSigningToken),
         { name: 'HMAC', hash: 'SHA-256' },
         false,
         ['sign']
@@ -227,6 +238,8 @@
           body: JSON.stringify({ username, password, role })
         });
         if (response.status === 201) {
+          const res = await response.json();
+          currentSigningToken = res.signing_token; // per-session token, see signRequestBody()
           showCustomToast("Account created successfully!");
           return { success: true, username, role };
         } else if (response.status === 409) {
@@ -238,7 +251,9 @@
         }
       } catch(e) {
         // Backend unreachable - just pretend it worked so the demo/dev flow
-        // can continue locally.
+        // can continue locally. currentSigningToken stays null in this
+        // path; any write-sensitive call still made this session will
+        // fail signRequestBody() loudly rather than send a bad signature.
         showCustomToast("Server offline, running in local session mode");
         return { success: true, username, role };
       }
@@ -253,6 +268,7 @@
         });
         if (response.ok) {
           const res = await response.json();
+          currentSigningToken = res.signing_token; // per-session token, see signRequestBody()
           showCustomToast("Logged in successfully!");
           return { success: true, username, role: res.role };
         } else {
@@ -322,15 +338,13 @@
 
     /**
      * Sends the player's answer to the server for grading, signed with
-     * X-Signature. server.py declares SUBMIT_ANSWER as
-     * `@app.route("/api/trivia/verify", methods=["GET"])` and reads the
-     * answer from a JSON body (`request.get_json()['answer']`), but
-     * browsers cannot send a body on a GET/HEAD request - fetch() throws
-     * a TypeError before any network call is made. This sends POST
-     * instead, which will succeed once the backend route accepts POST too
-     * (currently it only declares GET, so this call gets a 405 against the
-     * real server, and the caller falls back to grading locally via
-     * checkAnswerAgainstQuestion()).
+     * X-Signature. Browsers cannot send a body on a GET/HEAD request -
+     * fetch() throws a TypeError before any network call is made - so
+     * this sends POST. server.py's /api/trivia/verify route now accepts
+     * both GET (for non-browser/test clients per the original protocol
+     * doc) and POST (what every real browser client actually sends), so
+     * this succeeds against the real server instead of falling back to
+     * local-only grading via checkAnswerAgainstQuestion().
      */
     async function apiVerifyAnswer(answerArr) {
       try {
@@ -338,7 +352,7 @@
         const bodyString = JSON.stringify({ answer: payloadArray });
         const signature = await signRequestBody(bodyString);
         const response = await fetch('/api/trivia/verify', {
-          method: 'POST', // see note above - backend currently only declares GET
+          method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Signature': signature },
           body: bodyString
         });
@@ -371,15 +385,16 @@
      * (network error OR a non-ok response, which is also caught here) it
      * downloads a small hardcoded sample CSV instead so the "Export" button
      * always produces something during development/demos.
-     * Same GET-with-body browser limitation as apiVerifyAnswer() - server.py
-     * declares this route as GET but reads a JSON body, which browsers
-     * can't send on a GET request, so this sends POST instead.
+     * Same GET-with-body browser limitation as apiVerifyAnswer() - browsers
+     * can't send a body on a GET request, so this sends POST. server.py's
+     * /api/trivia/analytics route accepts both GET and POST, so this hits
+     * the real endpoint instead of falling back to the sample CSV.
      */
     async function exportStudentGrades() {
       const idxOfTriviaSet = quizBackendIndex[activeQuizTitle] ?? 0;
       try {
         const response = await fetch('/api/trivia/analytics', {
-          method: 'POST', // see note above - backend currently only declares GET
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ idx_of_trivia_set: idxOfTriviaSet })
         });
@@ -1659,6 +1674,7 @@
         activeRoomCode = state.room_code;
         currentQuestionIndex = state.question_idx || 0;
         isRoomHost = false;
+        if (state.signing_token) currentSigningToken = state.signing_token; // restore after a page reload
 
         // The saved state doesn't include pacing_mode, so look it up from
         // the room itself to decide whether this player should poll for
