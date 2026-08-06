@@ -1691,3 +1691,23 @@
       addQuestionToBuilder();
       attemptReconnect();
     });
+
+    /**
+     * Bug fix: browsers throttle setInterval timers in backgrounded
+     * tabs/windows (most aggressively in Chrome/Edge), which can stretch
+     * the 5s heartbeat loop (see startHeartbeat()) past
+     * reliability.py's 15s HEARTBEAT_TIMEOUT_SECONDS window whenever a
+     * window sits unfocused for a while -- e.g. a host's window while
+     * you're alt-tabbing to check on students' windows. That shows up as
+     * a false "Offline" status that doesn't even clear the instant you
+     * switch back, since the throttled interval hasn't ticked yet.
+     * Firing one heartbeat immediately (plus an immediate standings
+     * refresh, for whoever is looking at the host scoreboard) the moment
+     * a tab regains visibility closes that gap instead of waiting for
+     * the next tick.
+     */
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (heartbeatInterval) sendHeartbeat();
+      if (roomPollInterval) pollRoomStandings();
+    });
