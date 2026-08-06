@@ -1125,6 +1125,7 @@
 
       const idxOfTriviaSet = quizBackendIndex[activeQuizTitle];
       let joinedLive = false;
+      const liveStatusEl = document.getElementById('host-pin-live-status');
 
       if (idxOfTriviaSet !== undefined) {
         try {
@@ -1165,6 +1166,14 @@
       }
 
       document.getElementById('host-pin-display').innerText = `#${activeRoomPin}`;
+      if (joinedLive) {
+        liveStatusEl.innerText = '🟢 Live - other devices can join with this PIN';
+        liveStatusEl.style.color = 'var(--accent-neon, #22c55e)';
+      } else {
+        liveStatusEl.innerText = '⚠️ Local demo only - no one else can join this PIN';
+        liveStatusEl.style.color = '#f59e0b';
+      }
+      liveStatusEl.style.display = 'block';
 
       clearInterval(hostTimerInterval);
 
